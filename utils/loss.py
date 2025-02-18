@@ -11,6 +11,7 @@ def custom_loss(q, u_plus, u_minus, y, tau, norm=False):
     """
     # 归一化数据，保证各项loss的取值范围在0-1以内
     if norm:
+        """u±的归一化是否应当采用与q相同的策略？"""
         q = q / q.norm(dim=-1, keepdim=True)
         u_plus = u_plus / u_plus.norm(dim=-1, keepdim=True)
         u_minus = u_minus / u_minus.norm(dim=-1, keepdim=True)

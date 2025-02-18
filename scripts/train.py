@@ -1,5 +1,6 @@
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = '2'
+
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -9,6 +10,10 @@ import wandb
 from sklearn.metrics import accuracy_score, roc_auc_score
 import numpy as np
 from datetime import datetime
+import itertools
+import json
+from pathlib import Path
+
 from utils.load_data import MyDataloader
 from models.model import Baseline_MLP, MyCDM_MLP
 
@@ -21,7 +26,7 @@ def parse_args():
 
     # 实验配置
     parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='freeze', help='实验模式')
-    parser.add_argument('--proj_name', type=str, default='freeze_250218_00', help='项目名称，用于保存检查点')
+    parser.add_argument('--proj_name', type=str, default='freeze_250218_01', help='项目名称，用于保存检查点')
     parser.add_argument('--data', type=str, default='NIPS34', choices=['NIPS34'], help='使用的数据集名称')
     parser.add_argument('--scenario', type=str, default='all', choices=['all'], help='情景')
 
@@ -33,8 +38,12 @@ def parse_args():
     # 模型配置
     parser.add_argument('--bert_path', type=str, help='BERT预训练模型路径',
                         default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+    parser.add_argument('--tau', type=float, default=0.1, help='温度系数')
+    parser.add_argument('--lambda_cl', type=int, default=0.2, help='对比损失权重')
+    parser.add_argument('--lambda_reg', type=int, default=0.1, help='正则损失权重')
 
     # 训练控制
+    parser.add_argument('--grid_search', action='store_true', help='格点搜索调参')
     parser.add_argument('-esp', '--early_stop_patience', type=int, default=10, help='早停等待轮数')
     parser.add_argument('-ckpt', '--checkpoint_dir', type=str, default=None, help='检查点保存目录 (默认: ../checkpoints/{proj_name})')
     parser.add_argument('--verbose', type=int, default=0, help='是否显示epoch内进度')
@@ -156,10 +165,53 @@ def val_or_test(_model, _data_loader, _device, mode='baseline', verbose=0):
     return avg_pred_loss, acc, auc, all_preds, all_labels
 
 
-if __name__ == '__main__':
-    # 解析参数
-    args = parse_args()
+def my_gridsearch(_args):
+    """
+    自定义点搜索函数
+    """
+    # 定义参数网格
+    param_grid = _args.param_grid
+    # 生成参数组合
+    keys, values = zip(*param_grid.items())
+    param_combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
+    # 声明最佳组合结果存储变量
+    best_metrics = {'val_loss': float('inf')}
+    best_params = {}
 
+    # 遍历所有参数组合
+    for i, params in enumerate(param_combinations):
+        print(f"\n=== 正在训练参数组合 {i + 1}/{len(param_combinations)} ===")
+        print("当前参数:", json.dumps(params, indent=2))
+
+        # 修改待调参的参数
+        _args.tau = params['tau']
+        _args.lambda_reg = params['lambda_reg']
+        _args.lambda_cl = params['lambda_cl']
+
+        # 为当前参数组合创建独立目录
+        param_hash = hash(frozenset(params.items()))
+        _args.checkpoint_dir = f"./checkpoints/{_args.proj_name}/grid_{param_hash}"
+        Path(_args.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+
+        # 运行训练流程
+        current_metrics = main(_args)
+
+        # 更新最佳结果
+        if current_metrics['val_loss'] < best_metrics['val_loss']:
+            best_metrics = current_metrics
+            best_params = params.copy()
+
+    # 输出最终结果
+    print("\n=== 网格搜索完成 ===")
+    print(f"最佳参数组合: {json.dumps(best_params, indent=2)}")
+    print(f"对应验证指标: loss={best_metrics['val_loss']:.4f}, acc={best_metrics['val_acc']:.4f}, auc={best_metrics['val_auc']:.4f}")
+    return best_params, best_metrics
+
+
+def main(args):
+    """
+    主函数
+    """
     # 自动设备选择
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -183,22 +235,24 @@ if __name__ == '__main__':
 
     # 初始化训练状态
     best_val_loss = float('inf')
+    best_val_acc = 0.0
+    best_val_auc = 0.0
     early_stop_counter = 0
     start_epoch = 0
 
     # 加载模型
     if args.mode == 'baseline':
-        dict_token = None              # 影响dataloader的具体形式
+        dict_token = None  # 影响dataloader的具体形式
         model = Baseline_MLP(num_students=student_n, emb_path=exer_embeds_path).to(device)
     elif args.mode == 'freeze':
-        dict_token = None              # 同上，影响dataloader的具体形式
+        dict_token = None  # 同上，影响dataloader的具体形式
         model = MyCDM_MLP(num_students=student_n,
                           bert_model_name=args.bert_path,
                           lora_rank=8,
                           freeze=True,
-                          tau=0.1,
-                          lambda_reg=0.1,
-                          lambda_cl=0.2,
+                          tau=args.tau,
+                          lambda_reg=args.lambda_reg,
+                          lambda_cl=args.lambda_cl,
                           emb_path=exer_embeds_path
                           ).to(device)
     else:  # 'fine-tune'
@@ -207,9 +261,9 @@ if __name__ == '__main__':
                           bert_model_name=args.bert_path,
                           lora_rank=8,
                           freeze=False,
-                          tau=0.1,
-                          lambda_reg=0.1,
-                          lambda_cl=0.1,
+                          tau=args.tau,
+                          lambda_reg=args.lambda_reg,
+                          lambda_cl=args.lambda_cl,
                           emb_path=exer_embeds_path
                           ).to(device)
 
@@ -221,9 +275,9 @@ if __name__ == '__main__':
         batch_size=args.bs,
         id_to_token=dict_token,  # None or path( of json)
         data_set=train_path,
-        offset=0,                # 使用原始ID的数据集
+        offset=0,  # 使用原始ID的数据集
         pid_zero=0
-        )
+    )
     val_loader = MyDataloader(
         batch_size=args.bs,
         id_to_token=dict_token,
@@ -254,17 +308,9 @@ if __name__ == '__main__':
     # 初始化wandb
     wandb.init(
         project=args.proj_name,
-        config={
-            "mode": args.mode,
-            "batch_size": args.bs,
-            "epochs": args.epoch,
-            "learning_rate": args.learning_rate,
-            "dataset": args.data,
-            "scenario": args.scenario,
-            # "model_type": ,
-            "early_stop_patience": args.early_stop_patience
-        },
-        resume=True if start_epoch > 0 else False
+        config={**vars(args)},
+        resume=True if start_epoch > 0 else False,
+        reinit=True if args.grid_search else False  # 是否允许重复初始化
     )
 
     # 训练循环
@@ -275,16 +321,20 @@ if __name__ == '__main__':
         print(now.strftime("%Y-%m-%d %H:%M:%S"), f', training epoch {epoch + 1}')
         train_total_loss, train_pred_loss, train_cl_loss, train_reg_loss = train(
             model, train_loader, optimizer, device, mode=args.mode, verbose=args.verbose)
-        print(f"  Train Pred Loss: {train_pred_loss:.4f}, total Loss: {train_total_loss:.4f}, CL Loss: {train_cl_loss:.4f}, Reg Loss: {train_reg_loss:.4f} ")
+        print(
+            f"  Train Pred Loss: {train_pred_loss:.4f}, total Loss: {train_total_loss:.4f}, CL Loss: {train_cl_loss:.4f}, Reg Loss: {train_reg_loss:.4f} ")
 
         now = datetime.now()
         print(f'{now.strftime("%Y-%m-%d %H:%M:%S")}, validating epoch {epoch + 1}')
-        val_pred_loss, val_acc, val_auc, _, _ = val_or_test(model, val_loader, device, mode=args.mode, verbose=args.verbose)
+        val_pred_loss, val_acc, val_auc, _, _ = val_or_test(model, val_loader, device, mode=args.mode,
+                                                            verbose=args.verbose)
         print(f"  Val Pred Loss: {val_pred_loss:.4f} Acc: {val_acc:.4f} AUC: {val_auc:.4f}")
 
         # 早停逻辑
         if val_pred_loss < best_val_loss:
             best_val_loss = val_pred_loss
+            best_val_acc = val_acc
+            best_val_auc = val_auc
             early_stop_counter = 0
             # 保存最佳模型
             torch.save({
@@ -333,7 +383,8 @@ if __name__ == '__main__':
     print('========================================================================')
     now = datetime.now()
     print(f'{now.strftime("%Y-%m-%d %H:%M:%S")}, testing...')
-    test_pred_loss, test_acc, test_auc, y_pred, y_true = val_or_test(model, test_loader, device, mode=args.mode, verbose=args.verbose)
+    test_pred_loss, test_acc, test_auc, y_pred, y_true = val_or_test(model, test_loader, device, mode=args.mode,
+                                                                     verbose=args.verbose)
     print(f"\nFinal Test Results:")
     print(f"  Test Pred Loss: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
 
@@ -353,3 +404,29 @@ if __name__ == '__main__':
 
     # 记录最终结果
     wandb.finish()
+
+    # 返回验证集指标用于网格搜索比较
+    return {
+        'val_loss': best_val_loss,
+        'val_acc': best_val_acc,
+        'val_auc': best_val_auc
+    }
+
+
+
+if __name__ == '__main__':
+
+    args_in = parse_args()
+
+    # 格点搜索调参or直接训练
+    if args_in.grid_search:
+        # 指定调参字典
+        args_in.param_grid = {
+            'tau': [0.1],
+            'lambda_reg': [0.1],
+            'lambda_cl': [0.2, 0.3, 0.4, 0.5]
+        }
+        # 调用gridsearch函数
+        my_gridsearch(args_in)
+    else:
+        main(args_in)
