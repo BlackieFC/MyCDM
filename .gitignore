@@ -1,0 +1,6 @@
+__pycache__/
+checkpoints/
+data/
+scripts/wandb/
+utils/__pycache__/
+models/__pycache__/
