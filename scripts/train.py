@@ -26,21 +26,21 @@ def parse_args():
 
     # 实验配置
     parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='freeze', help='实验模式')
-    parser.add_argument('--proj_name', type=str, default='freeze_250219_02', help='项目名称，用于保存检查点')
+    parser.add_argument('--proj_name', type=str, default='freeze_250219_03', help='项目名称，用于保存检查点')
     parser.add_argument('--data', type=str, default='NIPS34', choices=['NIPS34'], help='使用的数据集名称')
     parser.add_argument('--scenario', type=str, default='all', choices=['all'], help='情景')
 
     # 训练超参数
     parser.add_argument('--bs', type=int, default=512, help='批次大小')
     parser.add_argument('--epoch', type=int, default=100, help='最大训练轮数')
-    parser.add_argument('-lr', '--learning_rate', type=float, default=0.001, help='学习率')
+    parser.add_argument('-lr', '--learning_rate', type=float, default=0.0005, help='学习率')
 
     # 模型配置
     parser.add_argument('--bert_path', type=str, help='BERT预训练模型路径',
                         default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
     parser.add_argument('--tau', type=float, default=0.1, help='温度系数')
-    parser.add_argument('--lambda_cl', type=int, default=10.0, help='对比损失权重')
-    parser.add_argument('--lambda_reg', type=int, default=1.0, help='正则损失权重')
+    parser.add_argument('--lambda_cl', type=int, default=5, help='对比损失权重')
+    parser.add_argument('--lambda_reg', type=int, default=0.1, help='正则损失权重')
 
     # 训练控制
     parser.add_argument('--grid_search', action='store_true', help='格点搜索调参')

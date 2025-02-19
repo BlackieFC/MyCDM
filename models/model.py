@@ -245,11 +245,11 @@ class MyCDM_MLP(nn.Module):
         self.bert_model_name = bert_model_name
 
         # 学生能力嵌入层（u+和u-）
-        self.stu_pos = ConstrainedEmbedding(  # nn.Embedding(
+        self.stu_pos = nn.Embedding(  # ConstrainedEmbedding(
             num_embeddings=num_students,
             embedding_dim=self.d_model        # norm=15.0
         )
-        self.stu_neg = ConstrainedEmbedding(  # nn.Embedding(
+        self.stu_neg = nn.Embedding(  # ConstrainedEmbedding(
             num_embeddings=num_students,
             embedding_dim=self.d_model        # norm=15.0
         )
@@ -285,8 +285,8 @@ class MyCDM_MLP(nn.Module):
 
     def initialize(self):
         """参数初始化"""
-        nn.init.normal_(self.stu_pos.weight, mean=0.0, std=0.1)
-        nn.init.normal_(self.stu_neg.weight, mean=0.0, std=0.1)
+        nn.init.normal_(self.stu_pos.weight, mean=0.0, std=0.15)
+        nn.init.normal_(self.stu_neg.weight, mean=0.0, std=0.15)
         # self.prednet
         for module in self.prednet:
             if isinstance(module, nn.Linear):

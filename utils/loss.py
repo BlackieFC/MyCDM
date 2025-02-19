@@ -63,16 +63,16 @@ def custom_loss(q, u_plus, u_minus, y, tau, norm=False, delta=None):
 def cl_and_reg_loss(q, u_plus, u_minus, y, tau=0.1, delta=0.1, norm=True):
     """简化版自定义对比损失函数"""
 
-    def huber_smooth(x):
-        """
-        改进的Huber平滑函数，保持输出非负性：当|x| <= delta 时：使用二次函数；当|x| >  delta 时：使用线性函数
-        """
-        abs_x = torch.abs(x)
-        return torch.where(abs_x <= delta, 0.5 * (x ** 2) / delta, abs_x - 0.5 * delta)
+    # def huber_smooth(x):
+    #     """
+    #     改进的Huber平滑函数，保持输出非负性：当|x| <= delta 时：使用二次函数；当|x| >  delta 时：使用线性函数
+    #     """
+    #     abs_x = torch.abs(x)
+    #     return torch.where(abs_x <= delta, 0.5 * (x ** 2) / delta, abs_x - 0.5 * delta)
 
     # 计算正负样本相似度（点积）并缩放
-    s_pos = huber_smooth(torch.cosine_similarity(q, u_plus, dim=1, eps=1e-8)) / tau   # (bs,)
-    s_neg = huber_smooth(torch.cosine_similarity(q, u_minus, dim=1, eps=1e-8)) / tau  # (bs,)
+    s_pos = torch.cosine_similarity(q, u_plus, dim=1, eps=1e-8) / tau   # (bs,)
+    s_neg = torch.cosine_similarity(q, u_minus, dim=1, eps=1e-8) / tau  # (bs,)
 
 
     # 计算对数概率（数值稳定版）
@@ -85,7 +85,7 @@ def cl_and_reg_loss(q, u_plus, u_minus, y, tau=0.1, delta=0.1, norm=True):
     loss_contrast = -term_per_sample.mean()
 
     # 正则化项（余弦相似度绝对值的均值）
-    loss_reg = huber_smooth(torch.cosine_similarity(u_plus, u_minus, dim=1, eps=1e-8)).mean()
+    loss_reg = torch.abs(torch.cosine_similarity(u_plus, u_minus, dim=1, eps=1e-8)).mean()
 
     # 返回对比损失&正则化损失
     return loss_contrast, loss_reg
