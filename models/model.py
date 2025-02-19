@@ -167,11 +167,14 @@ class Baseline_IRT(nn.Module):
 
 class MyCDM_MLP(nn.Module):
     """模型函数"""
-    def __init__(self, num_students, bert_model_name='bert-base-uncased', lora_rank=8, freeze=True, tau=0.1, lambda_reg=0.1,
-                 lambda_cl=0.1, emb_path='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/exer_text/nips34_KCandExer_emb.npy'):
+    def __init__(self, num_students, bert_model_name='bert-base-uncased', lora_rank=8, freeze=True, tau=0.1, lambda_reg=1.0,
+                 lambda_cl=10.0, emb_path='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/exer_text/nips34_KCandExer_emb.npy'):
         """初始化模型结构"""
         super().__init__()
-        if freeze:
+        if bert_model_name is None:
+                self.bert = nn.Embedding(num_embeddings=948, embedding_dim=768)  # 临时
+                nn.init.normal_(self.bert.weight, mean=0.0, std=0.1)
+        elif freeze:
             self.emb_path = emb_path
             self.bert = self.get_exer_embed_layer()  # nn.Embedding(948, 768)，固定的BERT嵌入
             """若冻结BERT权重，则不带着模型训练，效率太低——对应需求题目ID形式的输入"""
@@ -203,6 +206,7 @@ class MyCDM_MLP(nn.Module):
         self.lambda_cl = lambda_cl
         self.d_model = self.bert.weight.shape[1]
         self.freeze = freeze
+        self.bert_model_name = bert_model_name
 
         # 学生能力嵌入层（u+和u-）
         self.stu_pos = nn.Embedding(
@@ -215,8 +219,17 @@ class MyCDM_MLP(nn.Module):
         )
 
         # MLP预测头
+        # self.prednet = nn.Sequential(
+        #     nn.Linear(2 * self.d_model, 2 * self.d_model),
+        #     nn.Sigmoid(),
+        #     nn.Dropout(p=0.5),
+        #     nn.Linear(2 * self.d_model, self.d_model),
+        #     nn.Sigmoid(),
+        #     nn.Dropout(p=0.5),
+        #     nn.Linear(self.d_model, 1)
+        # )
         self.prednet = nn.Sequential(
-            nn.Linear(2 * self.d_model, 2 * self.d_model),
+            nn.Linear(3 * self.d_model, 2 * self.d_model),
             nn.Sigmoid(),
             nn.Dropout(p=0.5),
             nn.Linear(2 * self.d_model, self.d_model),
@@ -257,16 +270,22 @@ class MyCDM_MLP(nn.Module):
         u_pos = self.stu_pos(stu_ids)      # [batch_size, 768]
         u_neg = self.stu_neg(stu_ids)      # [batch_size, 768]
         # 题目表征
-        if self.freeze:
+        if self.freeze or self.bert_model_name is None:
             exer_emb = self.bert(exer_in)  # [batch_size, 768]
         else:
             bert_output = self.bert(       # [batch_size, 768]，提取CLS token作为题目嵌入
                 input_ids=exer_in["input_ids"],
                 attention_mask=exer_in["attention_mask"])
             exer_emb = bert_output.last_hidden_state[:, 0, :]
+
+        # u_pos = u_pos / u_pos.norm(dim=-1, keepdim=True)
+        # u_neg = u_neg / u_neg.norm(dim=-1, keepdim=True)
+        # exer_emb = exer_emb / exer_emb.norm(dim=-1, keepdim=True)
+
         # MLP预测头
-        stu_emb = u_pos - u_neg            # [batch_size, 768]
-        logits = self.prednet(torch.cat([exer_emb, stu_emb], dim=1))  # [batch_size, 1]
+        # stu_emb = u_pos - u_neg            # [batch_size, 768]
+        # logits = self.prednet(torch.cat([exer_emb, stu_emb], dim=1))  # [batch_size, 1]
+        logits = self.prednet(torch.cat([exer_emb, u_pos, u_neg], dim=1))  # [batch_size, 1]
         output = torch.sigmoid(logits).squeeze(-1)  # [batch_size]
 
         return output, exer_emb, u_pos, u_neg
@@ -277,9 +296,12 @@ class MyCDM_MLP(nn.Module):
         # BCE损失 <=> 预测损失
         bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size]
         # 对比损失 & 正则化项
-        loss_contrast, loss_reg = custom_loss(exer_emb, u_pos, u_neg, labels, self.tau)
+        loss_contrast, loss_reg = custom_loss(exer_emb, u_pos, u_neg, labels, self.tau, norm=True, delta=0.1)  # 不使用Huber形式
         # 总损失
-        total_loss = (1-self.lambda_cl)*bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
+        if self.lambda_cl < 1:
+            total_loss = (1-self.lambda_cl)*bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
+        else:
+            total_loss = bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
         return total_loss, bce_loss, loss_contrast, loss_reg
 
 
@@ -411,3 +433,63 @@ class MyCDM_IRT(nn.Module):
         total_loss = (1-self.lambda_cl-self.lambda_reg)*bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
         return total_loss, bce_loss, loss_contrast, loss_reg
 
+
+class IRT(nn.Module):
+    """
+    IRT
+    """
+    def __init__(self, student_n, exer_n, ratio=1.703, a_range=1, sigmoid=False):
+        """
+        :param student_n: 学生数
+        :param exer_n   : 题目数
+        :param d_model  : 嵌入特征维度
+        :param ratio    : 指数倍率因子
+        :param exer_emb : 题目嵌入张量
+        :param n_choice : 题目选项数
+        :param a_range  : 区分度取值范围
+        """
+        self.student_n = student_n
+        self.exer_n = exer_n
+        self.ratio = ratio
+        self.a_range = a_range
+        self.sigmoid = sigmoid
+
+        super(IRT, self).__init__()
+
+        # 嵌入层
+        self.student_emb = nn.Embedding(self.student_n, 1)
+        self.proj_disc = nn.Embedding(self.exer_n, 1)    # exer_id -> a
+        self.proj_diff = nn.Embedding(self.exer_n, 1)    # exer_id -> b
+
+        # initialization
+        for name, param in self.named_parameters():
+            if 'weight' in name and param.requires_grad:
+                nn.init.xavier_normal_(param)
+
+    def forward(self, stu_id, exer_id):
+        """
+        :param stu_id: LongTensor
+        :param exer_id: LongTensor
+        :return: FloatTensor, the probabilities of answering correctly
+        """
+        # 映射为具体项
+        theta = self.student_emb(stu_id)
+        a = torch.sigmoid(self.proj_disc(exer_id)) * self.a_range
+        b = self.proj_diff(exer_id)
+        if self.sigmoid:
+            theta = torch.sigmoid(theta)
+            b = torch.sigmoid(b)
+        # 交互函数
+        output = 1 / (1 + torch.exp(-self.ratio * a * (theta - b)))
+
+        return output.squeeze(), b, theta
+    
+    @staticmethod
+    def get_loss(output, labels):
+        """计算总损失"""
+        preds, _, _ = output
+        bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size], BCE损失
+        cl_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        reg_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        total_loss = bce_loss + cl_loss + reg_loss
+        return total_loss, bce_loss, cl_loss, reg_loss

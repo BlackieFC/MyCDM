@@ -1,7 +1,7 @@
 import torch
 
 
-def custom_loss(q, u_plus, u_minus, y, tau, norm=False):
+def custom_loss(q, u_plus, u_minus, y, tau, norm=False, delta=None):
     """
     自定义对比损失函数：
     Loss = -\frac{1}{N}\sum_{i=1}^{N}{[y_{i}log\frac{exp(\frac{s(q_{i}, u^{+})}{\tau})}{exp(\frac{s(q_{i}, u^{+})}{\tau}) +
@@ -13,12 +13,32 @@ def custom_loss(q, u_plus, u_minus, y, tau, norm=False):
     if norm:
         """u±的归一化是否应当采用与q相同的策略？"""
         q = q / q.norm(dim=-1, keepdim=True)
-        u_plus = u_plus / u_plus.norm(dim=-1, keepdim=True)
-        u_minus = u_minus / u_minus.norm(dim=-1, keepdim=True)
+        u_plus = u_plus / q.norm(dim=-1, keepdim=True)    # u_plus.norm(dim=-1, keepdim=True)
+        u_minus = u_minus / q.norm(dim=-1, keepdim=True)  # u_minus.norm(dim=-1, keepdim=True)
+        # u_plus = u_plus / u_plus.norm(dim=-1, keepdim=True)
+        # u_minus = u_minus / u_minus.norm(dim=-1, keepdim=True)
+
+    def huber_smooth(x):
+        """
+        改进的Huber平滑函数，保持输出非负性：
+        - 当|x| <= delta 时：使用二次函数
+        - 当|x| >  delta 时：使用线性函数
+        """
+        abs_x = torch.abs(x)
+        return torch.where(abs_x <= delta,
+                           0.5 * (x ** 2) / delta, 
+                           abs_x - 0.5 * delta
+                           )
 
     # 计算正负样本相似度（点积）并缩放
-    s_pos = torch.sum(q * u_plus, dim=1) / tau                         # (bs,)
-    s_neg = torch.sum(q * u_minus, dim=1) / tau                        # (bs,)
+    if delta is not None:
+        s_pos = huber_smooth(torch.sum(q * u_plus, dim=1)) / tau           # (bs,)
+        s_neg = huber_smooth(torch.sum(q * u_minus, dim=1)) / tau          # (bs,)
+        # s_pos = torch.abs(torch.sum(q * u_plus, dim=1)) / tau           # (bs,)
+        # s_neg = torch.abs(torch.sum(q * u_minus, dim=1)) / tau          # (bs,)
+    else:
+        s_pos = torch.sum(q * u_plus, dim=1) / tau                         # (bs,)
+        s_neg = torch.sum(q * u_minus, dim=1) / tau                        # (bs,)
 
     # 计算对数概率（数值稳定版）
     log_sum_exp = torch.logsumexp(torch.stack([s_pos, s_neg]), dim=0)  # (2,bs) -> (bs,)

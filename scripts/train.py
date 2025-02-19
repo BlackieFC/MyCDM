@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = '2'
+os.environ["CUDA_VISIBLE_DEVICES"] = '3'
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 from utils.load_data import MyDataloader
-from models.model import Baseline_MLP, MyCDM_MLP
+from models.model import Baseline_MLP, MyCDM_MLP, IRT
 
 
 def parse_args():
@@ -26,21 +26,21 @@ def parse_args():
 
     # 实验配置
     parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='freeze', help='实验模式')
-    parser.add_argument('--proj_name', type=str, default='freeze_250218_01', help='项目名称，用于保存检查点')
+    parser.add_argument('--proj_name', type=str, default='freeze_250219_02', help='项目名称，用于保存检查点')
     parser.add_argument('--data', type=str, default='NIPS34', choices=['NIPS34'], help='使用的数据集名称')
     parser.add_argument('--scenario', type=str, default='all', choices=['all'], help='情景')
 
     # 训练超参数
     parser.add_argument('--bs', type=int, default=512, help='批次大小')
     parser.add_argument('--epoch', type=int, default=100, help='最大训练轮数')
-    parser.add_argument('-lr', '--learning_rate', type=float, default=0.0005, help='学习率')
+    parser.add_argument('-lr', '--learning_rate', type=float, default=0.001, help='学习率')
 
     # 模型配置
     parser.add_argument('--bert_path', type=str, help='BERT预训练模型路径',
                         default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
     parser.add_argument('--tau', type=float, default=0.1, help='温度系数')
-    parser.add_argument('--lambda_cl', type=int, default=0.2, help='对比损失权重')
-    parser.add_argument('--lambda_reg', type=int, default=0.1, help='正则损失权重')
+    parser.add_argument('--lambda_cl', type=int, default=10.0, help='对比损失权重')
+    parser.add_argument('--lambda_reg', type=int, default=1.0, help='正则损失权重')
 
     # 训练控制
     parser.add_argument('--grid_search', action='store_true', help='格点搜索调参')
@@ -190,7 +190,7 @@ def my_gridsearch(_args):
 
         # 为当前参数组合创建独立目录
         param_hash = hash(frozenset(params.items()))
-        _args.checkpoint_dir = f"./checkpoints/{_args.proj_name}/grid_{param_hash}"
+        _args.checkpoint_dir = f"../checkpoints/{_args.proj_name}/grid_{param_hash}"
         Path(_args.checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
         # 运行训练流程
@@ -243,7 +243,8 @@ def main(args):
     # 加载模型
     if args.mode == 'baseline':
         dict_token = None  # 影响dataloader的具体形式
-        model = Baseline_MLP(num_students=student_n, emb_path=exer_embeds_path).to(device)
+        # model = Baseline_MLP(num_students=student_n, emb_path=exer_embeds_path).to(device)
+        model = IRT(student_n, exer_n).to(device)
     elif args.mode == 'freeze':
         dict_token = None  # 同上，影响dataloader的具体形式
         model = MyCDM_MLP(num_students=student_n,
@@ -330,20 +331,26 @@ def main(args):
                                                             verbose=args.verbose)
         print(f"  Val Pred Loss: {val_pred_loss:.4f} Acc: {val_acc:.4f} AUC: {val_auc:.4f}")
 
-        # 早停逻辑
-        if val_pred_loss < best_val_loss:
-            best_val_loss = val_pred_loss
-            best_val_acc = val_acc
+        now = datetime.now()
+        print(f'{now.strftime("%Y-%m-%d %H:%M:%S")}, testing epoch {epoch + 1}')
+        test_pred_loss, test_acc, test_auc, _, _ = val_or_test(model, test_loader, device, mode=args.mode,
+                                                            verbose=args.verbose)
+        print(f"  Test Pred Loss: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
+
+        # 早停逻辑（改为AUC优先）
+        if val_auc > best_val_auc:
             best_val_auc = val_auc
+            best_val_acc = val_acc
+            best_val_loss = val_pred_loss
             early_stop_counter = 0
             # 保存最佳模型
             torch.save({
                 'epoch': epoch,
                 'model_state': model.state_dict(),
                 'optimizer_state': optimizer.state_dict(),
-                'best_val_loss': best_val_loss
+                'best_val_auc': best_val_auc
             }, best_model_path)
-            print(f"发现新最佳模型，val_loss={val_pred_loss:.4f}，已保存至{best_model_path}")
+            print(f"发现新最佳模型，val_auc={best_val_auc:.4f}，已保存至{best_model_path}")
         else:
             early_stop_counter += 1
 
@@ -352,7 +359,7 @@ def main(args):
             'epoch': epoch,
             'model_state': model.state_dict(),
             'optimizer_state': optimizer.state_dict(),
-            'best_val_loss': best_val_loss,
+            'best_val_auc': best_val_auc,
             'early_stop_counter': early_stop_counter
         }, last_checkpoint_path)
 
@@ -423,8 +430,8 @@ if __name__ == '__main__':
         # 指定调参字典
         args_in.param_grid = {
             'tau': [0.1],
-            'lambda_reg': [0.1],
-            'lambda_cl': [0.2, 0.3, 0.4, 0.5]
+            'lambda_reg': [1.0],
+            'lambda_cl': [6.0, 8.0, 12.0, 14.0, 16.0, 18.0, 20.0]
         }
         # 调用gridsearch函数
         my_gridsearch(args_in)
