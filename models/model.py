@@ -3,7 +3,43 @@ import torch.nn as nn
 from transformers import BertModel, BertTokenizer
 from peft import LoraConfig, get_peft_model
 import numpy as np
-from utils.loss import custom_loss
+from utils.loss import custom_loss, cl_and_reg_loss
+
+
+class ConstrainedEmbedding(nn.Module):
+    """
+    初始化nn.Embedding层时，要求嵌入结果的L2范数等于15，并在后续训练过程中持续对嵌入层权重进行约束，使得嵌入结果的L2范数始终不变
+    """
+    def __init__(self, num_embeddings, embedding_dim, norm=15.0):
+        super().__init__()
+        self.norm = norm
+        self.embedding = nn.Embedding(num_embeddings, embedding_dim)
+        # 初始化参数
+        self._initialize_weights()
+        # 注册前向钩子保持约束
+        self.embedding.register_forward_hook(self._apply_constraint)
+
+    def _initialize_weights(self):
+        """初始化使每个嵌入向量L2范数=self.norm"""
+        with torch.no_grad():
+            # 先进行标准初始化
+            nn.init.normal_(self.embedding.weight, mean=0, std=1)
+            # 计算并规范化范数
+            norms = torch.norm(self.embedding.weight, p=2, dim=1, keepdim=True)
+            self.embedding.weight.data = self.norm * (self.embedding.weight.data / norms)
+
+    def _apply_constraint(self, module, input, output):
+        """前向传播时自动约束权重"""
+        with torch.no_grad():
+            # 计算当前范数
+            norms = torch.norm(module.weight, p=2, dim=1, keepdim=True)
+            # 重新缩放权重
+            module.weight.data = self.norm * (module.weight.data / norms)
+
+        return output
+
+    def forward(self, x):
+        return self.embedding(x)
 
 
 class Baseline_MLP(nn.Module):
@@ -172,8 +208,8 @@ class MyCDM_MLP(nn.Module):
         """初始化模型结构"""
         super().__init__()
         if bert_model_name is None:
-                self.bert = nn.Embedding(num_embeddings=948, embedding_dim=768)  # 临时
-                nn.init.normal_(self.bert.weight, mean=0.0, std=0.1)
+            self.bert = nn.Embedding(num_embeddings=948, embedding_dim=768)  # 临时
+            nn.init.normal_(self.bert.weight, mean=0.0, std=0.1)
         elif freeze:
             self.emb_path = emb_path
             self.bert = self.get_exer_embed_layer()  # nn.Embedding(948, 768)，固定的BERT嵌入
@@ -209,13 +245,13 @@ class MyCDM_MLP(nn.Module):
         self.bert_model_name = bert_model_name
 
         # 学生能力嵌入层（u+和u-）
-        self.stu_pos = nn.Embedding(
+        self.stu_pos = ConstrainedEmbedding(  # nn.Embedding(
             num_embeddings=num_students,
-            embedding_dim=self.d_model
+            embedding_dim=self.d_model        # norm=15.0
         )
-        self.stu_neg = nn.Embedding(
+        self.stu_neg = ConstrainedEmbedding(  # nn.Embedding(
             num_embeddings=num_students,
-            embedding_dim=self.d_model
+            embedding_dim=self.d_model        # norm=15.0
         )
 
         # MLP预测头
@@ -296,7 +332,8 @@ class MyCDM_MLP(nn.Module):
         # BCE损失 <=> 预测损失
         bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size]
         # 对比损失 & 正则化项
-        loss_contrast, loss_reg = custom_loss(exer_emb, u_pos, u_neg, labels, self.tau, norm=True, delta=0.1)  # 不使用Huber形式
+        # loss_contrast, loss_reg = custom_loss(exer_emb, u_pos, u_neg, labels, self.tau, norm=True, delta=0.1)
+        loss_contrast, loss_reg = cl_and_reg_loss(exer_emb, u_pos, u_neg, labels, self.tau, delta=0.1, norm=True)
         # 总损失
         if self.lambda_cl < 1:
             total_loss = (1-self.lambda_cl)*bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg

@@ -327,14 +327,12 @@ def main(args):
 
         now = datetime.now()
         print(f'{now.strftime("%Y-%m-%d %H:%M:%S")}, validating epoch {epoch + 1}')
-        val_pred_loss, val_acc, val_auc, _, _ = val_or_test(model, val_loader, device, mode=args.mode,
-                                                            verbose=args.verbose)
+        val_pred_loss, val_acc, val_auc, _, _ = val_or_test(model, val_loader, device, mode=args.mode, verbose=args.verbose)
         print(f"  Val Pred Loss: {val_pred_loss:.4f} Acc: {val_acc:.4f} AUC: {val_auc:.4f}")
 
         now = datetime.now()
         print(f'{now.strftime("%Y-%m-%d %H:%M:%S")}, testing epoch {epoch + 1}')
-        test_pred_loss, test_acc, test_auc, _, _ = val_or_test(model, test_loader, device, mode=args.mode,
-                                                            verbose=args.verbose)
+        test_pred_loss, test_acc, test_auc, _, _ = val_or_test(model, test_loader, device, mode=args.mode, verbose=args.verbose)
         print(f"  Test Pred Loss: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
 
         # 早停逻辑（改为AUC优先）
