@@ -247,16 +247,7 @@ def main(args):
         model = IRT(student_n, exer_n).to(device)
     elif args.mode == 'freeze':
         dict_token = None  # 同上，影响dataloader的具体形式
-        # model = MyCDM_MLP(num_students=student_n,
-        #                   bert_model_name=args.bert_path,
-        #                   lora_rank=8,
-        #                   freeze=True,
-        #                   tau=args.tau,
-        #                   lambda_reg=args.lambda_reg,
-        #                   lambda_cl=args.lambda_cl,
-        #                   emb_path=exer_embeds_path
-        #                   ).to(device)
-        model = MyCDM_IRT(num_students=student_n,
+        model = MyCDM_MLP(num_students=student_n,
                           bert_model_name=args.bert_path,
                           lora_rank=8,
                           freeze=True,
@@ -265,6 +256,15 @@ def main(args):
                           lambda_cl=args.lambda_cl,
                           emb_path=exer_embeds_path
                           ).to(device)
+        # model = MyCDM_IRT(num_students=student_n,
+        #                   bert_model_name=args.bert_path,
+        #                   lora_rank=8,
+        #                   freeze=True,
+        #                   tau=args.tau,
+        #                   lambda_reg=args.lambda_reg,
+        #                   lambda_cl=args.lambda_cl,
+        #                   emb_path=exer_embeds_path
+        #                   ).to(device)
         # model = MyCDM_MSA(num_students=student_n,
         #                   bert_model_name=args.bert_path,
         #                   lora_rank=8,

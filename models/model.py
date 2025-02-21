@@ -209,6 +209,147 @@ class MyCDM_MLP(nn.Module):
         super().__init__()
         if bert_model_name is None:
             self.bert = nn.Embedding(num_embeddings=948, embedding_dim=768)  # 临时
+            nn.init.normal_(self.bert.weight, mean=0.0, std=0.15)
+        elif freeze:
+            self.emb_path = emb_path
+            self.bert = self.get_exer_embed_layer()  # nn.Embedding(948, 768)，固定的BERT嵌入
+            """若冻结BERT权重，则不带着模型训练，效率太低——对应需求题目ID形式的输入"""
+            # # 读取预训练BERT
+            # self.bert = BertModel.from_pretrained(bert_model_name)
+            # # 冻结BERT参数
+            # for param in self.bert.parameters():
+            #     param.requires_grad = False
+        else:
+            """若使用LoRA对BERT进行微调，则需要把题目文本组织为字典形式的分词结果作为BERT输入"""
+            # 读取预训练BERT
+            self.bert = BertModel.from_pretrained(bert_model_name)
+            # 配置LoRA适配器
+            lora_config = LoraConfig(
+                r=lora_rank,
+                lora_alpha=32,
+                target_modules=["query", "value"],
+                lora_dropout=0.1,
+                bias="none"
+            )
+            # 应用LoRA适配器
+            self.bert = get_peft_model(self.bert, lora_config)
+            # 冻结BERT主干参数
+            for param in self.bert.base_model.parameters():
+                param.requires_grad = False
+
+        self.tau = tau
+        self.lambda_reg = lambda_reg
+        self.lambda_cl = lambda_cl
+        self.d_model = self.bert.weight.shape[1]
+        self.freeze = freeze
+        self.bert_model_name = bert_model_name
+
+        # 学生能力嵌入层（u+和u-）
+        self.stu_pos = nn.Embedding(  # ConstrainedEmbedding(
+            num_embeddings=num_students,
+            embedding_dim=self.d_model        # norm=15.0
+        )
+        self.stu_neg = nn.Embedding(  # ConstrainedEmbedding(
+            num_embeddings=num_students,
+            embedding_dim=self.d_model        # norm=15.0
+        )
+
+        # MLP预测头
+        self.prednet = nn.Sequential(
+            nn.Linear(2 * self.d_model, 2 * self.d_model),
+            nn.Sigmoid(),
+            nn.Dropout(p=0.5),
+            nn.Linear(2 * self.d_model, self.d_model),
+            nn.Sigmoid(),
+            nn.Dropout(p=0.5),
+            nn.Linear(self.d_model, 1)
+        )
+        # self.prednet = nn.Sequential(
+        #     nn.Linear(3 * self.d_model, 2 * self.d_model),
+        #     nn.Sigmoid(),
+        #     nn.Dropout(p=0.5),
+        #     nn.Linear(2 * self.d_model, self.d_model),
+        #     nn.Sigmoid(),
+        #     nn.Dropout(p=0.5),
+        #     nn.Linear(self.d_model, 1)
+        # )
+
+        # 初始化参数
+        self.initialize()
+
+    def get_exer_embed_layer(self):
+        """读取题目文本嵌入"""
+        kc_embeds = np.load(self.emb_path)
+        kc_embeds = torch.tensor(kc_embeds)  # (948, 768)
+        return nn.Embedding.from_pretrained(kc_embeds, freeze=True)
+
+    def initialize(self):
+        """参数初始化"""
+        nn.init.normal_(self.stu_pos.weight, mean=0.0, std=0.15)
+        nn.init.normal_(self.stu_neg.weight, mean=0.0, std=0.15)
+        # self.prednet
+        for module in self.prednet:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+
+    def forward(self, stu_ids, exer_in):
+        """
+        输入：
+            stu_ids: 学生ID张量 [batch_size]
+            （1）exer_in: 包含文本输入的字典
+                    input_ids       : [batch_size, seq_len]
+                    attention_mask  : [batch_size, seq_len]
+            （2）exer_in: 题目ID张量 [batch_size]
+        """
+        # 学生的正负双模态表征
+        u_pos = self.stu_pos(stu_ids)      # [batch_size, 768]
+        u_neg = self.stu_neg(stu_ids)      # [batch_size, 768]
+        # 题目表征
+        if self.freeze or self.bert_model_name is None:
+            exer_emb = self.bert(exer_in)  # [batch_size, 768]
+        else:
+            bert_output = self.bert(       # [batch_size, 768]，提取CLS token作为题目嵌入
+                input_ids=exer_in["input_ids"],
+                attention_mask=exer_in["attention_mask"])
+            exer_emb = bert_output.last_hidden_state[:, 0, :]
+
+        # u_pos = u_pos / u_pos.norm(dim=-1, keepdim=True)
+        # u_neg = u_neg / u_neg.norm(dim=-1, keepdim=True)
+        # exer_emb = exer_emb / exer_emb.norm(dim=-1, keepdim=True)
+
+        # MLP预测头
+        # stu_emb = u_pos - u_neg            # [batch_size, 768]
+        # logits = self.prednet(torch.cat([exer_emb, stu_emb], dim=1))  # [batch_size, 1]
+        logits = self.prednet(torch.cat([exer_emb, torch.multiply(exer_emb, u_pos-u_neg)], dim=1))  # [batch_size, 1]
+        output = torch.sigmoid(logits).squeeze(-1)  # [batch_size]
+
+        return output, exer_emb, u_pos, u_neg
+
+    def get_loss(self, output, labels):
+        """计算总损失"""
+        preds, exer_emb, u_pos, u_neg = output
+        # BCE损失 <=> 预测损失
+        bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size]
+        # 对比损失 & 正则化项
+        # loss_contrast, loss_reg = custom_loss(exer_emb, u_pos, u_neg, labels, self.tau, norm=True, delta=0.1)
+        loss_contrast, loss_reg = cl_and_reg_loss(exer_emb, u_pos, u_neg, labels, self.tau, delta=0.1, norm=True)
+        # 总损失
+        if self.lambda_cl < 1:
+            total_loss = (1-self.lambda_cl)*bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
+        else:
+            total_loss = bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
+        return total_loss, bce_loss, loss_contrast, loss_reg
+
+
+class MyCDM_MLP_backup(nn.Module):
+    """模型函数"""
+    def __init__(self, num_students, bert_model_name='bert-base-uncased', lora_rank=8, freeze=True, tau=0.1, lambda_reg=1.0,
+                 lambda_cl=10.0, emb_path='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/exer_text/nips34_KCandExer_emb.npy'):
+        """初始化模型结构"""
+        super().__init__()
+        if bert_model_name is None:
+            self.bert = nn.Embedding(num_embeddings=948, embedding_dim=768)  # 临时
             nn.init.normal_(self.bert.weight, mean=0.0, std=0.1)
         elif freeze:
             self.emb_path = emb_path
@@ -465,11 +606,14 @@ class MyCDM_IRT(nn.Module):
         # BCE损失 <=> 预测损失
         bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size]
         # 对比损失 & 正则化项
-        loss_contrast, loss_reg = custom_loss(exer_emb, u_pos, u_neg, labels, self.tau)
+        # loss_contrast, loss_reg = custom_loss(exer_emb, u_pos, u_neg, labels, self.tau, norm=True, delta=0.1)
+        loss_contrast, loss_reg = cl_and_reg_loss(exer_emb, u_pos, u_neg, labels, self.tau, delta=0.1, norm=True)
         # 总损失
-        total_loss = (1-self.lambda_cl-self.lambda_reg)*bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
+        if self.lambda_cl < 1:
+            total_loss = (1-self.lambda_cl)*bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
+        else:
+            total_loss = bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
         return total_loss, bce_loss, loss_contrast, loss_reg
-
 
 
 class MyCDM_IRT_backup(nn.Module):
