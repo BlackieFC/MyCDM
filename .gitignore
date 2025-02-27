@@ -4,4 +4,3 @@ data/
 scripts/wandb/
 utils/__pycache__/
 models/__pycache__/
-my_qplus.py
