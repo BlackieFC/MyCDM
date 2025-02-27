@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 from utils.load_data import MyDataloader
-from models.model import Baseline_MLP, MyCDM_MLP, IRT
+from models.model import Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT
 
 
 def parse_args():
@@ -26,7 +26,7 @@ def parse_args():
 
     # 实验配置
     parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='freeze', help='实验模式')
-    parser.add_argument('--proj_name', type=str, default='freeze_250219_03', help='项目名称，用于保存检查点')
+    parser.add_argument('--proj_name', type=str, default='freeze_250221_00', help='项目名称，用于保存检查点')
     parser.add_argument('--data', type=str, default='NIPS34', choices=['NIPS34'], help='使用的数据集名称')
     parser.add_argument('--scenario', type=str, default='all', choices=['all'], help='情景')
 
@@ -39,7 +39,7 @@ def parse_args():
     parser.add_argument('--bert_path', type=str, help='BERT预训练模型路径',
                         default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
     parser.add_argument('--tau', type=float, default=0.1, help='温度系数')
-    parser.add_argument('--lambda_cl', type=int, default=5, help='对比损失权重')
+    parser.add_argument('--lambda_cl', type=int, default=0.5, help='对比损失权重')
     parser.add_argument('--lambda_reg', type=int, default=0.1, help='正则损失权重')
 
     # 训练控制
@@ -256,6 +256,24 @@ def main(args):
                           lambda_cl=args.lambda_cl,
                           emb_path=exer_embeds_path
                           ).to(device)
+        # model = MyCDM_IRT(num_students=student_n,
+        #                   bert_model_name=args.bert_path,
+        #                   lora_rank=8,
+        #                   freeze=True,
+        #                   tau=args.tau,
+        #                   lambda_reg=args.lambda_reg,
+        #                   lambda_cl=args.lambda_cl,
+        #                   emb_path=exer_embeds_path
+        #                   ).to(device)
+        # model = MyCDM_MSA(num_students=student_n,
+        #                   bert_model_name=args.bert_path,
+        #                   lora_rank=8,
+        #                   freeze=True,
+        #                   tau=args.tau,
+        #                   lambda_reg=args.lambda_reg,
+        #                   lambda_cl=args.lambda_cl,
+        #                   emb_path=exer_embeds_path
+        #                   ).to(device)
     else:  # 'fine-tune'
         dict_token = exer_tokens_path  # 同上，影响dataloader的具体形式
         model = MyCDM_MLP(num_students=student_n,
