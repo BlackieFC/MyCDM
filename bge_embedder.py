@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import json
 import re
+import os
 
 
 # <editor-fold desc="自定义函数">
@@ -46,8 +47,141 @@ def merge_results(json_paths):
         return out_ind, out_txt
 
 
+def get_embeddings(_model, _tokenizer, texts, normalize=True, batch_size=4, 
+                   max_length=256, model_name="", save_path=None, resume_from=0):
+    """
+    获取文本嵌入向量，优化内存使用
+    
+    参数:
+        _model: 嵌入模型
+        _tokenizer: 分词器
+        texts: 待嵌入的文本列表
+        normalize: 是否归一化向量
+        batch_size: 批处理大小
+        max_length: 最大序列长度
+        model_name: 模型名称
+        save_path: 中间结果保存路径，用于断点续传
+        resume_from: 从第几个样本继续处理
+    """
+    # 设置设备
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # 仅将最必要的组件移动到GPU
+    _model = _model.to(device)
+    _model.eval()  # 评估模式
+    
+    # 如果有中间结果，加载它们
+    if save_path and os.path.exists(save_path) and resume_from > 0:
+        try:
+            saved_embeddings = np.load(save_path)
+            embeddings_list = [saved_embeddings]
+            start_idx = resume_from
+            print(f"继续从第 {start_idx} 个样本处理...")
+        except Exception as e:
+            print(f"无法加载中间结果: {e}")
+            embeddings_list = []
+            start_idx = 0
+    else:
+        embeddings_list = []
+        start_idx = 0
+    
+    # 计算总批次数以便显示进度
+    total_batches = (len(texts) - start_idx + batch_size - 1) // batch_size
+    
+    try:
+        # 分批处理文本
+        for i in range(start_idx, len(texts), batch_size):
+            # 显示进度
+            current_batch = (i - start_idx) // batch_size + 1
+            if current_batch % 100 == 0:
+                print(f'处理批次 {current_batch}/{total_batches} ({(current_batch/total_batches*100):.1f}%)')
+            
+            # 获取当前批次文本
+            end_idx = min(i + batch_size, len(texts))
+            batch_texts = texts[i:end_idx]
+            
+            # 模型特定的预处理
+            if "bge" in model_name.lower():
+                if "zh" in model_name.lower():
+                    batch_texts = [f"为这个句子生成表示：{text}" for text in batch_texts]
+                else:
+                    batch_texts = [f"Represent this sentence: {text}" for text in batch_texts]
+            
+            # 编码文本，使用较小的max_length减少内存使用
+            encoded_input = _tokenizer(
+                batch_texts,
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+                return_tensors='pt'
+            )
+            
+            # 将输入移到GPU，只在需要时移动
+            encoded_input = {k: v.to(device) for k, v in encoded_input.items()}
+            
+            # 减少内存使用的关键策略
+            with torch.no_grad():
+                # 使用torch.cuda.amp.autocast()可以降低精度，减少内存
+                if device == 'cuda':
+                    with torch.cuda.amp.autocast(enabled=True):
+                        model_output = _model(**encoded_input)
+                else:
+                    model_output = _model(**encoded_input)
+                
+                # 获取嵌入并立即转移到CPU
+                batch_embeddings = model_output.last_hidden_state[:, 0].cpu()
+                
+                # 如果需要归一化，在CPU上进行
+                if normalize:
+                    batch_embeddings = torch.nn.functional.normalize(batch_embeddings, p=2, dim=1)
+                
+                # 转换为numpy并立即释放张量
+                batch_numpy = batch_embeddings.numpy()
+                del batch_embeddings
+                embeddings_list.append(batch_numpy)
+            
+            # 立即释放GPU内存
+            del encoded_input
+            if device == 'cuda':
+                torch.cuda.empty_cache()
+            
+            # 每处理一定数量的批次保存中间结果
+            if save_path and current_batch % 100 == 0:
+                temp_embeddings = np.vstack(embeddings_list)
+                np.save(f"{save_path}_temp_{i}", temp_embeddings)
+                print(f"保存临时结果到 {save_path}_temp_{i}")
+    
+    except Exception as e:
+        print(f"处理中发生错误: {e}")
+        # 发生错误时保存已处理的结果
+        if save_path and embeddings_list:
+            temp_embeddings = np.vstack(embeddings_list)
+            np.save(f"{save_path}_error_at_{i}", temp_embeddings)
+            print(f"错误发生前的结果已保存到 {save_path}_error_at_{i}")
+        raise e
+    
+    finally:
+        # 确保模型回到CPU，释放GPU内存
+        _model = _model.cpu()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    # 合并所有批次的嵌入
+    if embeddings_list:
+        _embeddings = np.vstack(embeddings_list)
+        
+        # 保存最终结果
+        if save_path:
+            np.save(save_path, _embeddings)
+            print(f"完整结果已保存到 {save_path}")
+            
+        return _embeddings
+    else:
+        return None
+
+
 # 文本嵌入函数
-def get_embeddings(_model, _tokenizer, texts, normalize=True, batch_size=8):
+def get_embeddings_backup(_model, _tokenizer, texts, normalize=True, batch_size=8):
     # 设置设备
     device = "cuda" if torch.cuda.is_available() else "cpu"
     _model.to(device)
@@ -61,7 +195,7 @@ def get_embeddings(_model, _tokenizer, texts, normalize=True, batch_size=8):
     for i in range(0, len(texts), batch_size):
         if (i+1) % 100 == 0:
             print(f'{i+1} of {len(range(0, len(texts), batch_size))}')
-
+        
         if i == max(range(0, len(texts), batch_size)):
             batch_texts = texts[i: i + batch_size]
         else:
@@ -149,17 +283,19 @@ if __name__ == '__main__':
     #     "该学生编程能力突出，已掌握Python和Java基础，能独立完成小型项目。数据结构理解到链表和树的层次，但算法思维有待提升。数学基础扎实，统计学概念清晰。该生学习主动性高，但时间管理能力需要改进。"
     # ]
 
-    # 获取嵌入向量
-    embeddings = get_embeddings(model, tokenizer, student_descriptions, normalize=True, batch_size=8)
-    # 打印嵌入向量的形状
-    print(f"嵌入向量形状: {embeddings.shape}")                     # (4917, 1024)
-    embeddings = embeddings.astype(np.float32)  # 对齐数据格式
+    # # 获取嵌入向量
+    # embeddings = get_embeddings(model, tokenizer, student_descriptions, normalize=True, batch_size=1,
+    #                             max_length=256, model_name=model_name, save_path=None, resume_from=0)
+    # # 打印嵌入向量的形状
+    # print(f"嵌入向量形状: {embeddings.shape}")  # (n_stu_dense, 1024)
+    # embeddings = embeddings.astype(np.float32)  # 对齐数据格式
 
-    # 转存嵌入矩阵
-    stu_emb = np.zeros((n_stu, 1024), dtype=np.float32)   # (6148, 1024)
-    for idx, stu_id in enumerate(stu_ids):
-        stu_emb[stu_id, :] = embeddings[idx, :]
-    np.save(f'{root_dir}/user_emb_{task_name}.npy', stu_emb)
+    # # 转存嵌入矩阵
+    # stu_emb = np.zeros((n_stu, 1024), dtype=np.float32)
+    # for idx, stu_id in enumerate(stu_ids):
+    #     stu_emb[stu_id, :] = embeddings[idx, :]
+    # np.save(f'{root_dir}/user_emb_{task_name}.npy', stu_emb)
+    stu_emb = np.load(f'{root_dir}/user_emb_{task_name}.npy')
 
     """计算并显示相似度矩阵"""
     similarity_matrix = calculate_similarity(stu_emb)
@@ -185,7 +321,8 @@ if __name__ == '__main__':
     exer_ids, exer_descriptions = merge_results(exer_jsons)  # dict{idx: description}
 
     # 获取嵌入向量
-    embeddings = get_embeddings(model, tokenizer, exer_descriptions, normalize=True, batch_size=8)
+    embeddings = get_embeddings(model, tokenizer, exer_descriptions, normalize=True, batch_size=1,
+                                max_length=256, model_name=model_name, save_path=None, resume_from=0)
     # 打印嵌入向量的形状
     print(f"嵌入向量形状: {embeddings.shape}")    # (n_stu_dense, 1024)
     embeddings = embeddings.astype(np.float32)  # 对齐数据格式
