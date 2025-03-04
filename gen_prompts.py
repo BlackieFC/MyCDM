@@ -331,17 +331,17 @@ file_names = ['train']  # 'train'，生成Embedding只需要使用训练集
 
 """prompt文件路径"""
 # out_data = 'coll_info_collection/user_system_prompt'
-out_data = 'coll_info_collection/exer_system_prompt'
+# out_data = 'coll_info_collection/exer_system_prompt'
 # out_data = 'diagnosis_generation/user_system_prompt'
-# out_data = 'diagnosis_generation/exer_system_prompt'
+out_data = 'diagnosis_generation/exer_system_prompt'
 file_sys_prompt = f'D:/PythonProjects/KCD/LLM_diagnosis/{out_data}.txt'
 
 """输出文件"""
 # 实验名
 # exp_name = 'coll_user'
-exp_name = 'coll_exer'
+# exp_name = 'coll_exer'
 # exp_name = 'diag_user'
-# exp_name = 'diag_exer'
+exp_name = 'diag_exer'
 task_curr = f"sct_{senario}_{exp_name}_"  # 指定任务名(call_gpt4时的task名)：姓名_情景_步骤_对象
 # 路径
 out_data = doc_data + out_data

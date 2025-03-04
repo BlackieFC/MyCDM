@@ -1,11 +1,32 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import cosine_distances, cosine_similarity
+import matplotlib.pyplot as plt
+import seaborn as sns
 import os
 
 
 os.environ["OMP_NUM_THREADS"] = "4"  # 防止在Windows操作系统中使用带有MKL（Math Kernel Library）的KMeans算法时，可能会出现内存泄漏问题，尤其是当数据块数少于可用线程数时。
+
+
+def plot_pdf(data, bins=30, color='blue', title="Probability Density Function (PDF)", xlabel="Value", ylabel="Density"):
+    """
+    绘制一维数组的概率密度函数（PDF）图。
+    参数:
+    - data: 要绘制PDF的一维数组。
+    - bins: 直方图的柱数（默认值为30）。
+    - color: 绘图的颜色（默认值为蓝色）。
+    - title: 图形的标题（默认值为 "Probability Density Function (PDF)"）。
+    - xlabel: x轴标签（默认值为 "Value"）。
+    - ylabel: y轴标签（默认值为 "Density"）。
+    """
+    sns.set(style="whitegrid")
+    plt.figure(figsize=(8, 6))
+    sns.histplot(data, kde=True, bins=bins, color=color, stat="density")
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.show()
 
 
 def l2_normalize(array):
@@ -19,7 +40,7 @@ embeddings = np.load('data/NIPS34/all/exer_embeds.npy')  # 请确保文件路径
 embeddings = l2_normalize(embeddings)
 
 # 定义聚类数量范围
-n_clusters_range = range(2, 101)
+n_clusters_range = range(2, 400)
 avg_distances = []
 
 for n_clusters in n_clusters_range:
