@@ -255,17 +255,8 @@ class MyCDM_MLP(nn.Module):
         )
 
         # MLP预测头
-        self.prednet = nn.Sequential(
-            nn.Linear(2 * self.d_model, 2 * self.d_model),
-            nn.Sigmoid(),
-            nn.Dropout(p=0.5),
-            nn.Linear(2 * self.d_model, self.d_model),
-            nn.Sigmoid(),
-            nn.Dropout(p=0.5),
-            nn.Linear(self.d_model, 1)
-        )
         # self.prednet = nn.Sequential(
-        #     nn.Linear(3 * self.d_model, 2 * self.d_model),
+        #     nn.Linear(2 * self.d_model, 2 * self.d_model),
         #     nn.Sigmoid(),
         #     nn.Dropout(p=0.5),
         #     nn.Linear(2 * self.d_model, self.d_model),
@@ -273,6 +264,15 @@ class MyCDM_MLP(nn.Module):
         #     nn.Dropout(p=0.5),
         #     nn.Linear(self.d_model, 1)
         # )
+        self.prednet = nn.Sequential(
+            nn.Linear(3 * self.d_model, 2 * self.d_model),
+            nn.Sigmoid(),
+            nn.Dropout(p=0.5),
+            nn.Linear(2 * self.d_model, self.d_model),
+            nn.Sigmoid(),
+            nn.Dropout(p=0.5),
+            nn.Linear(self.d_model, 1)
+        )
 
         # 初始化参数
         self.initialize()
@@ -321,7 +321,7 @@ class MyCDM_MLP(nn.Module):
         # MLP预测头
         # stu_emb = u_pos - u_neg            # [batch_size, 768]
         # logits = self.prednet(torch.cat([exer_emb, stu_emb], dim=1))  # [batch_size, 1]
-        logits = self.prednet(torch.cat([exer_emb, torch.multiply(exer_emb, u_pos-u_neg)], dim=1))  # [batch_size, 1]
+        logits = self.prednet(torch.cat([exer_emb, torch.multiply(exer_emb, u_pos), torch.multiply(exer_emb, u_neg)], dim=1))  # [batch_size, 1]
         output = torch.sigmoid(logits).squeeze(-1)  # [batch_size]
 
         return output, exer_emb, u_pos, u_neg
@@ -332,8 +332,8 @@ class MyCDM_MLP(nn.Module):
         # BCE损失 <=> 预测损失
         bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size]
         # 对比损失 & 正则化项
-        # loss_contrast, loss_reg = custom_loss(exer_emb, u_pos, u_neg, labels, self.tau, norm=True, delta=0.1)
-        loss_contrast, loss_reg = cl_and_reg_loss(exer_emb, u_pos, u_neg, labels, self.tau, delta=0.1, norm=True)
+        loss_contrast, loss_reg = custom_loss(exer_emb, u_pos, u_neg, labels, self.tau, norm=False, delta=None)
+        # loss_contrast, loss_reg = cl_and_reg_loss(exer_emb, u_pos, u_neg, labels, self.tau, delta=0.1, norm=True)
         # 总损失
         if self.lambda_cl < 1:
             total_loss = (1-self.lambda_cl)*bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
