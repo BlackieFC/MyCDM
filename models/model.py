@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import BertModel, BertTokenizer
 from peft import LoraConfig, get_peft_model
 import numpy as np
@@ -952,3 +953,132 @@ class MyCDM_MSA(nn.Module):
         else:
             total_loss = bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
         return total_loss, bce_loss, loss_contrast, loss_reg
+
+
+class MyCDM_MLP_kmean(nn.Module):
+    """模型函数"""
+    def __init__(self,
+                 num_students,
+                 tau=0.1,
+                 lambda_reg=1.0,
+                 lambda_cl=10.0,
+                 emb_path='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/exer_text/nips34_KCandExer_emb.npy',  # (948,768)
+                 kmean_path='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/exer_text/nips34_kmean_emb.npy',    # (32,768)
+                 n_topk=3,
+                 ):
+        """初始化模型结构"""
+        super().__init__()
+        self.emb_path = emb_path
+        self.clu_path = kmean_path
+        self.n_topk = n_topk
+        self.bert = self.get_embed_layer()  # nn.Embedding(948, 32)，基于聚类结果的嵌入层
+
+        self.tau = tau
+        self.lambda_reg = lambda_reg
+        self.lambda_cl = lambda_cl
+        self.d_model = self.bert.weight.shape[1]
+
+        # 学生能力嵌入层（u+和u-）—— 映射到聚类数，同时调用时需要后接sigmoid
+        self.stu_pos = nn.Embedding(
+            num_embeddings=num_students,  # 注意嵌入层+sigmoid才是非负的能力表征
+            embedding_dim=self.d_model    # 嵌入层仅得到logits
+        )
+        self.stu_neg = nn.Embedding(
+            num_embeddings=num_students,
+            embedding_dim=self.d_model
+        )
+        # MLP预测头
+        self.prednet = nn.Sequential(
+            nn.Linear(2 * self.d_model, 2 * self.d_model),
+            nn.Sigmoid(),
+            nn.Dropout(p=0.5),
+            nn.Linear(2 * self.d_model, self.d_model),
+            nn.Sigmoid(),
+            nn.Dropout(p=0.5),
+            nn.Linear(self.d_model, 1)
+        )
+        # 初始化参数
+        self.initialize()
+
+    def get_embed_layer(self):
+        """读取题目文本嵌入（基于K-mean聚类）"""
+        kc_embeds = np.load(self.emb_path)
+        kc_embeds = torch.tensor(kc_embeds)         # (948, 768)
+        kc_embeds = kc_embeds / kc_embeds.norm(p=2, dim=1, keepdim=True)
+
+        km_center = np.load(self.clu_path)
+        km_center = torch.tensor(km_center)         # (32, 768)
+        km_center = km_center / km_center.norm(p=2, dim=1, keepdim=True)
+
+        sim = torch.matmul(kc_embeds, km_center.T)  # (948,32)
+
+        if self.n_topk:
+            # 找到每行的top-k值及其索引
+            _, top_k_idx = torch.topk(sim, k=min(self.n_topk, sim.size(1)), dim=1)
+            # 创建掩码矩阵
+            mask = torch.zeros_like(sim, dtype=torch.bool)
+            batch_indices = torch.arange(sim.size(0)).unsqueeze(1).expand(-1, top_k_idx.size(1))
+            mask[batch_indices, top_k_idx] = True
+            # 使用掩码将非top-k的位置设为负无穷大
+            C_masked = torch.where(mask, sim, torch.tensor(float('-inf')))
+            # 应用softmax函数
+            sparse_softmax_output = F.softmax(C_masked, dim=1)
+        else:
+            # 逐行距平
+            sim = sim - torch.mean(sim, dim=1, keepdim=True)
+            # 应用softmax函数
+            sparse_softmax_output = F.softmax(sim, dim=1)
+
+        return nn.Embedding.from_pretrained(sparse_softmax_output, freeze=True)
+
+    def initialize(self):
+        """参数初始化"""
+        nn.init.normal_(self.stu_pos.weight, mean=0.0, std=0.1)  # sigmoid后非负，保证取0-1中间值
+        nn.init.normal_(self.stu_neg.weight, mean=0.0, std=0.1)
+        # self.prednet
+        for module in self.prednet:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+
+    def forward(self, stu_ids, exer_in):
+        """
+        输入：
+            stu_ids: 学生ID张量 [batch_size]
+            （1）exer_in: 包含文本输入的字典
+                    input_ids       : [batch_size, seq_len]
+                    attention_mask  : [batch_size, seq_len]
+            （2）exer_in: 题目ID张量 [batch_size]
+        """
+        # 学生的正负双模态表征（需要补充上sigmoid）
+        u_pos = torch.sigmoid(self.stu_pos(stu_ids))      # [batch_size, 32]
+        u_neg = torch.sigmoid(self.stu_neg(stu_ids))      # [batch_size, 32]
+        # 题目表征
+        exer_emb = self.bert(exer_in)  # [batch_size, 768]
+
+        # MLP预测头
+        # stu_emb = u_pos - u_neg            # [batch_size, 768]
+        # logits = self.prednet(torch.cat([exer_emb, stu_emb], dim=1))  # [batch_size, 1]
+        logits = self.prednet(torch.cat([exer_emb, u_pos, u_neg], dim=1))  # [batch_size, 1]
+        output = torch.sigmoid(logits).squeeze(-1)  # [batch_size]
+
+        return output, exer_emb, u_pos, u_neg
+
+    def get_loss(self, output, labels):
+        """计算总损失"""
+        preds, exer_emb, u_pos, u_neg = output
+        # BCE损失 <=> 预测损失
+        bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size]
+        # 对比损失 & 正则化项
+        # loss_contrast, loss_reg = custom_loss(exer_emb, u_pos, u_neg, labels, self.tau, norm=True, delta=0.1)
+        loss_contrast, loss_reg = cl_and_reg_loss(exer_emb, u_pos, u_neg, labels, self.tau, delta=0.1, norm=True)
+        # 总损失
+        if self.lambda_cl < 1:
+            total_loss = (1-self.lambda_cl)*bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
+        else:
+            total_loss = bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg
+        return total_loss, bce_loss, loss_contrast, loss_reg
+
+
+
+

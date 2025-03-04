@@ -5,6 +5,11 @@ import os
 import re
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)  # 忽略FutureWarning类型的警告
+import random
+random.seed(42)  # 全局随机种子设置
+
+
+# <editor-fold desc="自定义函数">
 
 
 def extract_substring(text):
@@ -242,7 +247,10 @@ def get_exer_diagnosis(path_in, q_names, p_contents, u_sum, p_sum, max_len=None)
     return result_dict
 
 
-# <editor-fold desc="读取NIPS34">
+# </editor-fold>
+
+
+# <editor-fold desc="（视情况）读取NIPS34原始文件">
 """读取数据，统计数量"""
 df = pd.read_csv(r'C:\Games\NIPS\data\train_data\train_task_3_4.csv',
                  usecols=['QuestionId', 'UserId', 'IsCorrect'])
@@ -280,7 +288,7 @@ print(max(result))
 # </editor-fold>
 
 
-# <editor-fold desc="(old)全量数据集划分">
+# <editor-fold desc="（已完成）全量数据集划分">
 
 # cols = ['user_id', 'exer_id', 'knowledge_code', 'score']
 # json_result = []
@@ -315,11 +323,11 @@ print(max(result))
 
 """最大长度截断"""
 maxlen = 20      # 默认值为None，不做截断
-senario = 'all'  # 只使用于all情景
+senario = 'longtail'  # all，只使用于all情景（longtail情景仅训练集为真子集）
 
 """输入数据集位置"""
 doc_data = f'data/NIPS34/{senario}/'
-file_names = ['train']  # 'val', 'test', 'target_train', 'target_val'，生成Embedding只需要使用训练集
+file_names = ['train']  # 'train'，生成Embedding只需要使用训练集
 
 """prompt文件路径"""
 # out_data = 'coll_info_collection/user_system_prompt'
@@ -329,7 +337,7 @@ out_data = 'diagnosis_generation/exer_system_prompt'
 file_sys_prompt = f'D:/PythonProjects/KCD/LLM_diagnosis/{out_data}.txt'
 
 """输出文件"""
-# 文件名
+# 实验名
 # exp_name = 'coll_user'
 # exp_name = 'coll_exer'
 # exp_name = 'diag_user'
@@ -342,33 +350,74 @@ ensure_path_exists(out_data)
 # </editor-fold>
 
 
-# <editor-fold desc="process coll info">
+# <editor-fold desc="(已运行)人造长尾数据集">
 
-with open('data/NIPS34/all/coll_info_collection/sct_all_coll_exer_20Clip_367987_all4gpt_res.json', 'r', encoding='utf-8') as file:
-    exer_coll_info = json.load(file)
-with open('data/NIPS34/all/coll_info_collection/sct_all_coll_user_20Clip_367987_all4gpt_res.json', 'r', encoding='utf-8') as file:
-    user_coll_info = json.load(file)
+# file_path = f'{doc_data}train.json'
+# file_out = f'{doc_data}train_longtail.json'
+#
+# with open(file_path, 'r', encoding='utf-8') as fi:
+#     recs = json.load(fi)  # list of dicts
+#
+# recs = pd.DataFrame(recs)
+# exer_count = recs['exer_id'].value_counts()
+#
+# result = exer_count[exer_count <= 3]
+# result = list(set(result) | set(random.sample(list(range(948)), 948//3)))
+#
+# exer_count = {e:0 for e in result}
+# list_filtered = []
+# for ind, row in recs.iterrows():
+#     if row['exer_id'] in exer_count.keys():
+#         # 需要进行人为处理的pid
+#         if exer_count[row['exer_id']] < 3:
+#             exer_count[row['exer_id']] += 1
+#             list_filtered.append(row.to_dict())
+#     else:
+#         # 无需进行人为处理的pid，直接转存
+#         list_filtered.append(row.to_dict())
+#
+# # 将人工控制后的数据保存为json
+# with open(file_out, 'w', encoding='utf-8') as json_file:
+#     json.dump(list_filtered, json_file, indent=4, ensure_ascii=False)
+#
+# # check
+# list_filtered = pd.DataFrame(list_filtered)
+# print(len(recs))
+# print(len(list_filtered))
+# exer_count = list_filtered['exer_id'].value_counts()
+# print(len(exer_count[exer_count <= 3]))
+
+# </editor-fold>
+
+
+# <editor-fold desc="process coll info">
 
 exer_sum = {}
 user_sum = {}
 
-count = 0
-for elem in exer_coll_info:
-    key = elem['idx']
-    val = extract_substring(elem['output'])
-    exer_sum[key] = val
-    if val is None:
-        count += 1
-print(count)
+if exp_name == 'diag_user' or exp_name == 'diag_exer':
+    with open('data/NIPS34/all/coll_info_collection/sct_all_coll_exer_20Clip_367987_all4gpt_res.json', 'r', encoding='utf-8') as file:
+        exer_coll_info = json.load(file)
+    with open('data/NIPS34/all/coll_info_collection/sct_all_coll_user_20Clip_367987_all4gpt_res.json', 'r', encoding='utf-8') as file:
+        user_coll_info = json.load(file)
 
-count = 0
-for elem in user_coll_info:
-    key = elem['idx']
-    val = extract_substring(elem['output'])
-    user_sum[key] = val
-    if val is None:
-        count += 1
-print(count)
+    count = 0
+    for elem in exer_coll_info:
+        key = elem['idx']
+        val = extract_substring(elem['output'])
+        exer_sum[key] = val
+        if val is None:
+            count += 1
+    print(count)
+
+    count = 0
+    for elem in user_coll_info:
+        key = elem['idx']
+        val = extract_substring(elem['output'])
+        user_sum[key] = val
+        if val is None:
+            count += 1
+    print(count)
 
 # </editor-fold>
 
@@ -395,8 +444,9 @@ if exp_name == 'coll_user' or exp_name == 'diag_user':
             sys_prompt += line
     # 读取-待处理文件
     user_prompts = []
-    for file_name in file_names:
+    for file_name in file_names:  # 实际操作时，只有train.py
         file_path = f'{doc_data}{file_name}.json'
+
         if exp_name == 'coll_user':
             user_prompts.append(get_user_prompt(file_path, q_names=df_KC_tree, p_contents=exer_content, max_len=maxlen))
         else:
