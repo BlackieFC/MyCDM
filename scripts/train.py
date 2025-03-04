@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 from utils.load_data import MyDataloader
-from models.model import Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT
+from models.model import Baseline_IRT, Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT
 
 
 def parse_args():
@@ -28,12 +28,12 @@ def parse_args():
     parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='freeze', help='实验模式')
     parser.add_argument('--proj_name', type=str, default='freeze_250221_00', help='项目名称，用于保存检查点')
     parser.add_argument('--data', type=str, default='NIPS34', choices=['NIPS34'], help='使用的数据集名称')
-    parser.add_argument('--scenario', type=str, default='all', choices=['all'], help='情景')
+    parser.add_argument('--scenario', type=str, default='all', choices=['all', 'Algebra', 'GeometryandMeasure', 'Number'], help='情景')
 
     # 训练超参数
-    parser.add_argument('--bs', type=int, default=512, help='批次大小')
+    parser.add_argument('--bs', type=int, default=256, help='批次大小')
     parser.add_argument('--epoch', type=int, default=100, help='最大训练轮数')
-    parser.add_argument('-lr', '--learning_rate', type=float, default=0.0005, help='学习率')
+    parser.add_argument('-lr', '--learning_rate', type=float, default=0.001, help='学习率')
 
     # 模型配置
     parser.add_argument('--bert_path', type=str, help='BERT预训练模型路径',
@@ -243,8 +243,12 @@ def main(args):
     # 加载模型
     if args.mode == 'baseline':
         dict_token = None  # 影响dataloader的具体形式
-        # model = Baseline_MLP(num_students=student_n, emb_path=exer_embeds_path).to(device)
-        model = IRT(student_n, exer_n).to(device)
+        # BERT-IRT or BGE-IRT
+        # model = Baseline_IRT(num_students=student_n, emb_path=exer_embeds_path).to(device)
+        # # BERT-MLP or BGE-MLP
+        model = Baseline_MLP(num_students=student_n, emb_path=exer_embeds_path).to(device)
+        # # IRT
+        # model = IRT(student_n, exer_n).to(device)
     elif args.mode == 'freeze':
         dict_token = None  # 同上，影响dataloader的具体形式
         model = MyCDM_MLP(num_students=student_n,
