@@ -100,7 +100,7 @@ def get_embeddings(_model, _tokenizer, texts, normalize=True, batch_size=4,
             end_idx = min(i + batch_size, len(texts))
             batch_texts = texts[i:end_idx]
             
-            # 模型特定的预处理
+            # 模型特定的预处理（BERT不需要指令前缀）
             if "bge" in model_name.lower():
                 if "zh" in model_name.lower():
                     batch_texts = [f"为这个句子生成表示：{text}" for text in batch_texts]
@@ -129,7 +129,10 @@ def get_embeddings(_model, _tokenizer, texts, normalize=True, batch_size=4,
                     model_output = _model(**encoded_input)
                 
                 # 获取嵌入并立即转移到CPU
-                batch_embeddings = model_output.last_hidden_state[:, 0].cpu()
+                if "bge" in model_name.lower():
+                    batch_embeddings = model_output.last_hidden_state[:, 0].cpu()  # BGE取[CLS]
+                else:
+                    batch_embeddings = model_output.pooler_output.cpu()            # 使用BERT的池化输出
                 
                 # 如果需要归一化，在CPU上进行
                 if normalize:
@@ -348,7 +351,48 @@ if __name__ == '__main__':
 
     # </editor-fold>
 
-    # <editor-fold desc="直接嵌入题目文本的最终版本json">
+    # <editor-fold desc="（任务3）BGE直接嵌入题目文本的最终版本json">
+
+    # """针对题目文本json"""
+    # file_path = 'data/nips34_short_kc.json'
+    # file_out = 'data/nips34_short_kc.npy'
+    # with open(file_path, 'r', encoding='utf-8') as file:
+    #     exer_content = json.load(file)
+    # exer_ids = []
+    # exer_descriptions = []
+    # for key, val in exer_content.items():
+    #     exer_ids.append(int(key))
+    #     exer_descriptions.append(val)
+    #
+    # # 获取嵌入向量
+    # embeddings = get_embeddings(model, tokenizer, exer_descriptions, normalize=True, batch_size=1,
+    #                             max_length=256, model_name=model_name, save_path=None, resume_from=0)
+    # # 打印嵌入向量的形状
+    # print(f"嵌入向量形状: {embeddings.shape}")  # (n_stu_dense, 1024)
+    # embeddings = embeddings.astype(np.float32)  # 对齐数据格式
+    #
+    # # 转存嵌入矩阵
+    # exer_emb = np.zeros((n_exer, 1024), dtype=np.float32)
+    # for idx, exer_id in enumerate(exer_ids):
+    #     exer_emb[exer_id, :] = embeddings[idx, :]
+    # np.save(file_out, exer_emb)
+
+    """计算并显示相似度矩阵"""
+    # similarity_matrix = calculate_similarity(exer_emb)
+    # print("\n题目描述相似度矩阵:")
+    # print(similarity_matrix)
+    # dict_sim = {}
+    # # 转存相似度信息为
+    # for ind_row in exer_ids:
+    #     temp = similarity_matrix[ind_row, exer_ids].tolist()
+    #     # 排序并取负号实现倒序，获取前20个最大值的索引
+    #     dict_sim[str(ind_row)] = np.argsort(temp)[-20:][::-1].tolist()
+    # with open(f"{root_dir}/similar_exercises.json", 'w', encoding='utf-8') as json_file:
+    #     json.dump(dict_sim, json_file, indent=4, ensure_ascii=False)
+
+    # </editor-fold>
+
+    # <editor-fold desc="（任务4）BERT直接嵌入题目文本的最终版本json">
 
     """针对题目文本json"""
     file_path = 'data/nips34_short_kc.json'
@@ -362,6 +406,11 @@ if __name__ == '__main__':
         exer_descriptions.append(val)
 
     # 获取嵌入向量
+    from transformers import BertTokenizer, BertModel
+    model = BertModel.from_pretrained('/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+    tokenizer = BertTokenizer.from_pretrained('/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+    model.eval()
+
     embeddings = get_embeddings(model, tokenizer, exer_descriptions, normalize=True, batch_size=1,
                                 max_length=256, model_name=model_name, save_path=None, resume_from=0)
     # 打印嵌入向量的形状
