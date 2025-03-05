@@ -28,7 +28,7 @@ def parse_args():
     parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='freeze', help='实验模式')
     parser.add_argument('--proj_name', type=str, default='freeze_250221_00', help='项目名称，用于保存检查点')
     parser.add_argument('--data', type=str, default='NIPS34', choices=['NIPS34'], help='使用的数据集名称')
-    parser.add_argument('--scenario', type=str, default='all', choices=['all', 'Algebra', 'GeometryandMeasure', 'Number'], help='情景')
+    parser.add_argument('--scenario', type=str, default='all', choices=['all', 'Algebra', 'Algebra_cold', 'GeometryandMeasure', 'Number'], help='情景')
 
     # 训练超参数
     parser.add_argument('--bs', type=int, default=256, help='批次大小')
@@ -220,7 +220,7 @@ def main(args):
     train_path = f'{data_root}/train.json'
     val_path = f'{data_root}/val.json'
     test_path = f'{data_root}/test.json'
-    exer_embeds_path = f'{data_root}/exer_embeds.npy'
+    exer_embeds_path = f'{data_root}/exer_embeds_bert.npy'
     exer_tokens_path = f'{data_root}/exer_tokens.json'
 
     # 读取数据配置
@@ -243,9 +243,9 @@ def main(args):
     # 加载模型
     if args.mode == 'baseline':
         dict_token = None  # 影响dataloader的具体形式
-        # BERT-IRT or BGE-IRT
+        # # BERT-IRT or BGE-IRT
         # model = Baseline_IRT(num_students=student_n, emb_path=exer_embeds_path).to(device)
-        # # BERT-MLP or BGE-MLP
+        # BERT-MLP or BGE-MLP
         model = Baseline_MLP(num_students=student_n, emb_path=exer_embeds_path).to(device)
         # # IRT
         # model = IRT(student_n, exer_n).to(device)
