@@ -276,42 +276,48 @@ if __name__ == '__main__':
 
     # root_dir = '/mnt/new_pfs/liming_team/auroraX/songchentao/gpt/KCD'
     # task_name = 'sct_all_diag_user_20Clip_'
-    # start_idx = range(0, 5000, 500)
-    # stu_jsons = [f'{root_dir}/response_{task_name}_{e}_{e+500}.json' for e in start_idx]
-    # stu_ids, student_descriptions = merge_results(stu_jsons)  # dict{idx: description}
-    # # 最终的学生描述示例：
-    # # student_descriptions = [
-    # #     "该学生在数学方面表现出色，尤其是代数和微积分概念掌握扎实。然而，在几何证明方面仍需加强。物理基础知识良好，但对于电磁学的理解有待提高。学生展现出较强的逻辑思维能力，但有时缺乏创新性思考。",
-    # #     "这位学生的语文素养很高，阅读理解能力强，写作生动有创意。英语听说读写均衡发展，能流利表达。历史和政治科目有深入思考，但地理知识薄弱。该生自主学习能力强，善于整合跨学科知识。",
-    # #     "该学生编程能力突出，已掌握Python和Java基础，能独立完成小型项目。数据结构理解到链表和树的层次，但算法思维有待提升。数学基础扎实，统计学概念清晰。该生学习主动性高，但时间管理能力需要改进。"
-    # # ]
-    #
-    # # # 获取嵌入向量
-    # # embeddings = get_embeddings(model, tokenizer, student_descriptions, normalize=True, batch_size=1,
-    # #                             max_length=256, model_name=model_name, save_path=None, resume_from=0)
-    # # # 打印嵌入向量的形状
-    # # print(f"嵌入向量形状: {embeddings.shape}")  # (n_stu_dense, 1024)
-    # # embeddings = embeddings.astype(np.float32)  # 对齐数据格式
-    #
-    # # # 转存嵌入矩阵
-    # # stu_emb = np.zeros((n_stu, 1024), dtype=np.float32)
-    # # for idx, stu_id in enumerate(stu_ids):
-    # #     stu_emb[stu_id, :] = embeddings[idx, :]
-    # # np.save(f'{root_dir}/user_emb_{task_name}.npy', stu_emb)
+
+    root_dir = '/mnt/new_pfs/liming_team/auroraX/songchentao/gpt/KCD_longtail'
+    task_name = 'sct_longtail_diag_user_'
+
+    start_idx = range(0, 5000, 500)
+    stu_jsons = [f'{root_dir}/response_{task_name}_{e}_{e+500}.json' for e in start_idx]
+    stu_ids, student_descriptions = merge_results(stu_jsons)  # dict{idx: description}
+    # 最终的学生描述示例：
+    # student_descriptions = [
+    #     "该学生在数学方面表现出色，尤其是代数和微积分概念掌握扎实。然而，在几何证明方面仍需加强。物理基础知识良好，但对于电磁学的理解有待提高。学生展现出较强的逻辑思维能力，但有时缺乏创新性思考。",
+    #     "这位学生的语文素养很高，阅读理解能力强，写作生动有创意。英语听说读写均衡发展，能流利表达。历史和政治科目有深入思考，但地理知识薄弱。该生自主学习能力强，善于整合跨学科知识。",
+    #     "该学生编程能力突出，已掌握Python和Java基础，能独立完成小型项目。数据结构理解到链表和树的层次，但算法思维有待提升。数学基础扎实，统计学概念清晰。该生学习主动性高，但时间管理能力需要改进。"
+    # ]
+    
+    # 调用模型，获取嵌入向量
+    embeddings = get_embeddings(model, tokenizer, student_descriptions, normalize=True, batch_size=1,
+                                max_length=256, model_name=model_name, save_path=None, resume_from=0)
+    # 打印嵌入向量的形状
+    print(f"嵌入向量形状: {embeddings.shape}")  # (n_stu_dense, 1024)
+    embeddings = embeddings.astype(np.float32)  # 对齐数据格式
+    
+    # 转存嵌入矩阵
+    stu_emb = np.zeros((n_stu, embeddings.shape[-1]), dtype=np.float32)
+    for idx, stu_id in enumerate(stu_ids):
+        stu_emb[stu_id, :] = embeddings[idx, :]
+    np.save(f'{root_dir}/user_emb_{task_name}.npy', stu_emb)
+
+    # # 若已完成嵌入，则直接读取结果计算相似度矩阵
     # stu_emb = np.load(f'{root_dir}/user_emb_{task_name}.npy')
-    #
-    # """计算并显示相似度矩阵"""
-    # similarity_matrix = calculate_similarity(stu_emb)
-    # print("\n学生知识描述相似度矩阵:")
-    # print(similarity_matrix)
-    # dict_sim = {}
-    # # 转存相似度信息为
-    # for ind_row in stu_ids:
-    #     temp = similarity_matrix[ind_row, stu_ids].tolist()
-    #     # 排序并取负号实现倒序，获取前20个最大值的索引
-    #     dict_sim[str(ind_row)] = np.argsort(temp)[-20:][::-1].tolist()
-    # with open(f"{root_dir}/similar_students.json", 'w', encoding='utf-8') as json_file:
-    #     json.dump(dict_sim, json_file, indent=4, ensure_ascii=False)
+    
+    """计算并显示相似度矩阵"""
+    similarity_matrix = calculate_similarity(stu_emb)
+    print("\n学生知识描述相似度矩阵:")
+    print(similarity_matrix)
+    dict_sim = {}
+    # 转存相似度信息为
+    for ind_row in stu_ids:
+        temp = similarity_matrix[ind_row, stu_ids].tolist()
+        # 排序并取负号实现倒序，获取前20个最大值的索引
+        dict_sim[str(ind_row)] = np.argsort(temp)[-20:][::-1].tolist()
+    with open(f"{root_dir}/similar_students_{task_name}.json", 'w', encoding='utf-8') as json_file:
+        json.dump(dict_sim, json_file, indent=4, ensure_ascii=False)
 
     # </editor-fold>
 
@@ -319,35 +325,39 @@ if __name__ == '__main__':
 
     # root_dir = '/mnt/new_pfs/liming_team/auroraX/songchentao/gpt/KCD'
     # task_name = 'sct_all_diag_exer_20Clip_'
-    # start_idx = range(0, 1000, 500)
-    # exer_jsons = [f'{root_dir}/response_{task_name}_{e}_{e + 500}.json' for e in start_idx]
-    # exer_ids, exer_descriptions = merge_results(exer_jsons)  # dict{idx: description}
-    #
-    # # 获取嵌入向量
-    # embeddings = get_embeddings(model, tokenizer, exer_descriptions, normalize=True, batch_size=1,
-    #                             max_length=256, model_name=model_name, save_path=None, resume_from=0)
-    # # 打印嵌入向量的形状
-    # print(f"嵌入向量形状: {embeddings.shape}")    # (n_stu_dense, 1024)
-    # embeddings = embeddings.astype(np.float32)  # 对齐数据格式
-    #
-    # # 转存嵌入矩阵
-    # exer_emb = np.zeros((n_exer, 1024), dtype=np.float32)
-    # for idx, exer_id in enumerate(exer_ids):
-    #     exer_emb[exer_id, :] = embeddings[idx, :]
-    # np.save(f'{root_dir}/item_emb_{task_name}.npy', exer_emb)
-    #
-    # """计算并显示相似度矩阵"""
-    # similarity_matrix = calculate_similarity(exer_emb)
-    # print("\n题目描述相似度矩阵:")
-    # print(similarity_matrix)
-    # dict_sim = {}
-    # # 转存相似度信息为
-    # for ind_row in exer_ids:
-    #     temp = similarity_matrix[ind_row, exer_ids].tolist()
-    #     # 排序并取负号实现倒序，获取前20个最大值的索引
-    #     dict_sim[str(ind_row)] = np.argsort(temp)[-20:][::-1].tolist()
-    # with open(f"{root_dir}/similar_exercises.json", 'w', encoding='utf-8') as json_file:
-    #     json.dump(dict_sim, json_file, indent=4, ensure_ascii=False)
+
+    root_dir = '/mnt/new_pfs/liming_team/auroraX/songchentao/gpt/KCD_longtail'
+    task_name = 'sct_longtail_diag_exer_'
+
+    start_idx = range(0, 1000, 500)
+    exer_jsons = [f'{root_dir}/response_{task_name}_{e}_{e + 500}.json' for e in start_idx]
+    exer_ids, exer_descriptions = merge_results(exer_jsons)  # dict{idx: description}
+    
+    # 获取嵌入向量
+    embeddings = get_embeddings(model, tokenizer, exer_descriptions, normalize=True, batch_size=1,
+                                max_length=256, model_name=model_name, save_path=None, resume_from=0)
+    # 打印嵌入向量的形状
+    print(f"嵌入向量形状: {embeddings.shape}")    # (n_stu_dense, 1024)
+    embeddings = embeddings.astype(np.float32)  # 对齐数据格式
+    
+    # 转存嵌入矩阵
+    exer_emb = np.zeros((n_exer, embeddings.shape[-1]), dtype=np.float32)
+    for idx, exer_id in enumerate(exer_ids):
+        exer_emb[exer_id, :] = embeddings[idx, :]
+    np.save(f'{root_dir}/item_emb_{task_name}.npy', exer_emb)
+    
+    """计算并显示相似度矩阵"""
+    similarity_matrix = calculate_similarity(exer_emb)
+    print("\n题目描述相似度矩阵:")
+    print(similarity_matrix)
+    dict_sim = {}
+    # 转存相似度信息为
+    for ind_row in exer_ids:
+        temp = similarity_matrix[ind_row, exer_ids].tolist()
+        # 排序并取负号实现倒序，获取前20个最大值的索引
+        dict_sim[str(ind_row)] = np.argsort(temp)[-20:][::-1].tolist()
+    with open(f"{root_dir}/similar_exercises_{task_name}.json", 'w', encoding='utf-8') as json_file:
+        json.dump(dict_sim, json_file, indent=4, ensure_ascii=False)
 
     # </editor-fold>
 
@@ -394,47 +404,47 @@ if __name__ == '__main__':
 
     # <editor-fold desc="（任务4）BERT直接嵌入题目文本的最终版本json">
 
-    """针对题目文本json"""
-    file_path = 'data/nips34_short_kc.json'
-    file_out = 'data/nips34_short_kc.npy'
-    with open(file_path, 'r', encoding='utf-8') as file:
-        exer_content = json.load(file)
-    exer_ids = []
-    exer_descriptions = []
-    for key, val in exer_content.items():
-        exer_ids.append(int(key))
-        exer_descriptions.append(val)
+    # """针对题目文本json"""
+    # file_path = 'data/nips34_short_kc.json'
+    # file_out = 'data/nips34_short_kc_bert.npy'
+    # with open(file_path, 'r', encoding='utf-8') as file:
+    #     exer_content = json.load(file)
+    # exer_ids = []
+    # exer_descriptions = []
+    # for key, val in exer_content.items():
+    #     exer_ids.append(int(key))
+    #     exer_descriptions.append(val)
 
-    # 获取嵌入向量
-    from transformers import BertTokenizer, BertModel
-    model = BertModel.from_pretrained('/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
-    tokenizer = BertTokenizer.from_pretrained('/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
-    model.eval()
+    # # 获取嵌入向量
+    # from transformers import BertTokenizer, BertModel
+    # model = BertModel.from_pretrained('/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+    # tokenizer = BertTokenizer.from_pretrained('/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+    # model.eval()
 
-    embeddings = get_embeddings(model, tokenizer, exer_descriptions, normalize=True, batch_size=1,
-                                max_length=256, model_name=model_name, save_path=None, resume_from=0)
-    # 打印嵌入向量的形状
-    print(f"嵌入向量形状: {embeddings.shape}")  # (n_stu_dense, 1024)
-    embeddings = embeddings.astype(np.float32)  # 对齐数据格式
+    # embeddings = get_embeddings(model, tokenizer, exer_descriptions, normalize=True, batch_size=1,
+    #                             max_length=256, model_name=model_name, save_path=None, resume_from=0)
+    # # 打印嵌入向量的形状
+    # print(f"嵌入向量形状: {embeddings.shape}")  # (n_stu_dense, 1024)
+    # embeddings = embeddings.astype(np.float32)  # 对齐数据格式
 
-    # 转存嵌入矩阵
-    exer_emb = np.zeros((n_exer, 1024), dtype=np.float32)
-    for idx, exer_id in enumerate(exer_ids):
-        exer_emb[exer_id, :] = embeddings[idx, :]
-    np.save(file_out, exer_emb)
+    # # 转存嵌入矩阵
+    # exer_emb = np.zeros((n_exer, embeddings.shape[-1]), dtype=np.float32)
+    # for idx, exer_id in enumerate(exer_ids):
+    #     exer_emb[exer_id, :] = embeddings[idx, :]
+    # np.save(file_out, exer_emb)
 
-    """计算并显示相似度矩阵"""
-    # similarity_matrix = calculate_similarity(exer_emb)
-    # print("\n题目描述相似度矩阵:")
-    # print(similarity_matrix)
-    # dict_sim = {}
-    # # 转存相似度信息为
-    # for ind_row in exer_ids:
-    #     temp = similarity_matrix[ind_row, exer_ids].tolist()
-    #     # 排序并取负号实现倒序，获取前20个最大值的索引
-    #     dict_sim[str(ind_row)] = np.argsort(temp)[-20:][::-1].tolist()
-    # with open(f"{root_dir}/similar_exercises.json", 'w', encoding='utf-8') as json_file:
-    #     json.dump(dict_sim, json_file, indent=4, ensure_ascii=False)
+    # """计算并显示相似度矩阵"""
+    # # similarity_matrix = calculate_similarity(exer_emb)
+    # # print("\n题目描述相似度矩阵:")
+    # # print(similarity_matrix)
+    # # dict_sim = {}
+    # # # 转存相似度信息为
+    # # for ind_row in exer_ids:
+    # #     temp = similarity_matrix[ind_row, exer_ids].tolist()
+    # #     # 排序并取负号实现倒序，获取前20个最大值的索引
+    # #     dict_sim[str(ind_row)] = np.argsort(temp)[-20:][::-1].tolist()
+    # # with open(f"{root_dir}/similar_exercises.json", 'w', encoding='utf-8') as json_file:
+    # #     json.dump(dict_sim, json_file, indent=4, ensure_ascii=False)
 
     # </editor-fold>
 
