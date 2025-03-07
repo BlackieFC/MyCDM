@@ -10,12 +10,6 @@
       "pin_memory": true
     }
   },
-  "optimizer": {
-    "type": "Adam",
-    "params": {
-      "lr": 1e-3
-    }
-  },
   "fp16": {
     "enabled": "true"
   }

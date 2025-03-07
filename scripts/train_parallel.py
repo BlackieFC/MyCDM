@@ -13,7 +13,7 @@ from datetime import datetime
 
 from utils.load_data import MyDataloader
 from models.model import MyCDM_MLP_FFT
-
+from transformers import AdamW
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 from tqdm.auto import tqdm
@@ -98,6 +98,7 @@ def main_parallel(args):
     # </editor-fold>
 
     # <editor-fold desc="封装模型、优化器、dataloader">
+    # 声明模型
     model = MyCDM_MLP_FFT(
         num_students=student_n,
         bert_model_name=args.bert_path,
@@ -105,6 +106,7 @@ def main_parallel(args):
         lambda_reg=args.lambda_reg,
         lambda_cl=args.lambda_cl
     )
+
     # 设置Dataloader
     train_loader = MyDataloader(
         batch_size=args.bs,
@@ -127,11 +129,23 @@ def main_parallel(args):
         offset=0,
         pid_zero=0
     )
+
+    # 创建两组参数：BERT和非BERT
+    bert_params = set(model.bert.parameters())
+    other_params = [p for p in model.parameters() if p not in bert_params]
+    # 设置优化器
+    optimizer = AdamW(
+        [
+            {"params": model.bert.parameters(), "lr": 2e-5},    # BERT使用较小学习率
+            {"params": other_params, "lr": 1e-3}                # CDM较大学习率
+        ],
+        weight_decay=0.01
+    )
     # 使用accelerator准备组件（关键修改）
-    model, train_loader, val_loader, test_loader = accelerator.prepare(
-        [model, train_loader, val_loader, test_loader])
-    # 从模型中获取DeepSpeed自动创建的优化器
-    optimizer = model.optimizer  # 此时优化器参数由ds_config定义（如lr=1e-3）
+    model, optimizer, train_loader, val_loader, test_loader = accelerator.prepare(
+        [model, optimizer, train_loader, val_loader, test_loader])
+    # # 从模型中获取DeepSpeed自动创建的优化器
+    # optimizer = model.optimizer  # 此时优化器参数由ds_config定义（如lr=1e-3）
     # </editor-fold>
 
     # <editor-fold desc="断点续训 & wandb并行修改">
