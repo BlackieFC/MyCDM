@@ -41,7 +41,7 @@ def parse_args():
                         default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
     parser.add_argument('--tau', type=float, default=0.1, help='温度系数')
     parser.add_argument('--lambda_cl', type=int, default=0.5, help='对比损失权重')
-    parser.add_argument('--lambda_reg', type=int, default=0.1, help='正则损失权重')
+    parser.add_argument('--lambda_reg', type=int, default=1, help='正则损失权重')
 
     # 训练控制
     parser.add_argument('-esp', '--early_stop_patience', type=int, default=5, help='早停等待轮数')
@@ -380,6 +380,9 @@ def val_or_test_parallel(_accelerator, _model, _data_loader):  # , _device, verb
 
 
 if __name__ == '__main__':
-
+    """
+    启动命令：
+    accelerate launch --config_file accelerate_config.yaml train_parallel.py --deepspeed --deepspeed_config ds_config.json --proj_name parallel_250307_00 --scenario all  
+    """
     args_in = parse_args()
     main_parallel(args_in)
