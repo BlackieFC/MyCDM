@@ -1092,8 +1092,10 @@ class MyCDM_MLP_FFT(nn.Module):
         self.lambda_reg = lambda_reg
         self.lambda_cl = lambda_cl
 
-        # 读取预训练BERT
+        # 读取预训练BERT & 解冻所有参数
         self.bert = BertModel.from_pretrained(bert_model_name)
+        for param in self.bert.parameters():
+            param.requires_grad = True
         self.d_model = self.bert.config.hidden_size
         # 学生能力嵌入层（u+和u-）
         self.stu_pos = nn.Embedding(
@@ -1152,7 +1154,7 @@ class MyCDM_MLP_FFT(nn.Module):
         # BCE损失 <=> 预测损失
         bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size]
         # 对比损失 & 正则化项
-        loss_contrast, loss_reg = cl_and_reg_loss(exer_emb, u_pos, u_neg, labels, self.tau, delta=0.1, norm=True)
+        loss_contrast, loss_reg = cl_and_reg_loss(exer_emb, u_pos, u_neg, labels, self.tau)
         # 总损失
         if self.lambda_cl < 1:
             total_loss = (1-self.lambda_cl)*bce_loss + self.lambda_cl*loss_contrast + self.lambda_reg*loss_reg

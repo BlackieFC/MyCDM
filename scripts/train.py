@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = '3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '5'
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,7 +15,8 @@ import json
 from pathlib import Path
 
 from utils.load_data import MyDataloader
-from models.model import Baseline_IRT, Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT
+from models.model import Baseline_IRT, Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT, MyCDM_MLP_FFT
+from tqdm.auto import tqdm
 
 
 def parse_args():
@@ -28,10 +29,10 @@ def parse_args():
     parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='freeze', help='实验模式')
     parser.add_argument('--proj_name', type=str, default='freeze_250221_00', help='项目名称，用于保存检查点')
     parser.add_argument('--data', type=str, default='NIPS34', choices=['NIPS34'], help='使用的数据集名称')
-    parser.add_argument('--scenario', type=str, default='all', choices=['all', 'Algebra', 'Algebra_cold', 'GeometryandMeasure', 'Number'], help='情景')
+    parser.add_argument('--scenario', type=str, default='all', choices=['all', 'Algebra', 'Algebra_cold', 'GeometryandMeasure', 'Number', 'student_all', 'student_cut'], help='情景')
 
     # 训练超参数
-    parser.add_argument('--bs', type=int, default=256, help='批次大小')
+    parser.add_argument('--bs', type=int, default=512, help='批次大小')
     parser.add_argument('--epoch', type=int, default=100, help='最大训练轮数')
     parser.add_argument('-lr', '--learning_rate', type=float, default=0.001, help='学习率')
 
@@ -40,11 +41,11 @@ def parse_args():
                         default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
     parser.add_argument('--tau', type=float, default=0.1, help='温度系数')
     parser.add_argument('--lambda_cl', type=int, default=0.5, help='对比损失权重')
-    parser.add_argument('--lambda_reg', type=int, default=0.1, help='正则损失权重')
+    parser.add_argument('--lambda_reg', type=int, default=1.0, help='正则损失权重')
 
     # 训练控制
     parser.add_argument('--grid_search', action='store_true', help='格点搜索调参')
-    parser.add_argument('-esp', '--early_stop_patience', type=int, default=10, help='早停等待轮数')
+    parser.add_argument('-esp', '--early_stop_patience', type=int, default=5, help='早停等待轮数')
     parser.add_argument('-ckpt', '--checkpoint_dir', type=str, default=None, help='检查点保存目录 (默认: ../checkpoints/{proj_name})')
     parser.add_argument('--verbose', type=int, default=0, help='是否显示epoch内进度')
 
@@ -68,13 +69,9 @@ def train(_model, _train_loader, _optimizer, _device, mode='baseline', verbose=0
     cl_loss = 0.0
     reg_loss = 0.0
 
-    count = 0
-    for batch in _train_loader:
-        if verbose and (count + 1) % 200 == 0:  # verbose=0时简化可视化输出
-            _now = datetime.now()
-            print(f'{_now.strftime("%Y-%m-%d %H:%M:%S")}, {count+1} of {len(_train_loader)}')
-        count += 1
+    progress_bar = tqdm(_train_loader, desc="Training")
 
+    for batch in progress_bar:
         # 数据准备
         stu_ids = batch['stu_id'].to(_device)                     # 学生ID
         labels = batch['label'].to(_device).float()               # 响应真实值
@@ -123,13 +120,15 @@ def val_or_test(_model, _data_loader, _device, mode='baseline', verbose=0):
     all_preds = []
     all_labels = []
 
-    count = 0
+    progress_bar = tqdm(_data_loader, desc="Validating or Testing...")
+
+    # count = 0
     with torch.no_grad():
-        for batch in _data_loader:
-            if verbose and (count + 1) % 200 == 0:
-                _now = datetime.now()
-                print(f'{_now.strftime("%Y-%m-%d %H:%M:%S")}, {count + 1} of {len(_data_loader)}')
-            count += 1
+        for batch in progress_bar:
+        #     if verbose and (count + 1) % 200 == 0:
+        #         _now = datetime.now()
+        #         print(f'{_now.strftime("%Y-%m-%d %H:%M:%S")}, {count + 1} of {len(_data_loader)}')
+        #     count += 1
 
             # 数据准备
             stu_ids = batch['stu_id'].to(_device)                     # 学生ID
@@ -243,14 +242,22 @@ def main(args):
     # 加载模型
     if args.mode == 'baseline':
         dict_token = None  # 影响dataloader的具体形式
+
         # # BERT-IRT or BGE-IRT
         # model = Baseline_IRT(num_students=student_n, emb_path=exer_embeds_path).to(device)
+
         # BERT-MLP or BGE-MLP
         model = Baseline_MLP(num_students=student_n, emb_path=exer_embeds_path).to(device)
+
         # # IRT
         # model = IRT(student_n, exer_n).to(device)
+
+        # 设置优化器
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+
     elif args.mode == 'freeze':
         dict_token = None  # 同上，影响dataloader的具体形式
+
         model = MyCDM_MLP(num_students=student_n,
                           bert_model_name=args.bert_path,
                           lora_rank=8,
@@ -260,6 +267,7 @@ def main(args):
                           lambda_cl=args.lambda_cl,
                           emb_path=exer_embeds_path
                           ).to(device)
+        
         # model = MyCDM_IRT(num_students=student_n,
         #                   bert_model_name=args.bert_path,
         #                   lora_rank=8,
@@ -269,6 +277,7 @@ def main(args):
         #                   lambda_cl=args.lambda_cl,
         #                   emb_path=exer_embeds_path
         #                   ).to(device)
+
         # model = MyCDM_MSA(num_students=student_n,
         #                   bert_model_name=args.bert_path,
         #                   lora_rank=8,
@@ -278,20 +287,29 @@ def main(args):
         #                   lambda_cl=args.lambda_cl,
         #                   emb_path=exer_embeds_path
         #                   ).to(device)
+
+        # 设置优化器
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+
     else:  # 'fine-tune'
         dict_token = exer_tokens_path  # 同上，影响dataloader的具体形式
-        model = MyCDM_MLP(num_students=student_n,
-                          bert_model_name=args.bert_path,
-                          lora_rank=8,
-                          freeze=False,
-                          tau=args.tau,
-                          lambda_reg=args.lambda_reg,
-                          lambda_cl=args.lambda_cl,
-                          emb_path=exer_embeds_path
-                          ).to(device)
+        model = MyCDM_MLP_FFT(num_students=student_n,
+                              bert_model_name=args.bert_path,
+                              tau=args.tau,
+                              lambda_reg=args.lambda_reg,
+                              lambda_cl=args.lambda_cl,
+                              ).to(device)
 
-    # 设置优化器
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+        # 设置优化器（全量微调bert，设置分段学习率）—— 此时命令行传入的lr参数无效！
+        bert_params = list(model.bert.parameters())
+        # 使用参数ID进行比较
+        other_params = [p for p in model.parameters() if id(p) not in [id(bp) for bp in bert_params]]
+        optimizer = torch.optim.Adam(
+            [
+                {"params": bert_params, "lr": 2e-5},    # BERT使用较小学习率
+                {"params": other_params, "lr": 1e-3}    # 其他部分使用较大学习率
+            ]
+        )
 
     # 设置Dataloader
     train_loader = MyDataloader(

@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = '3'
+# os.environ["CUDA_VISIBLE_DEVICES"] = '3'
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,7 +13,7 @@ from datetime import datetime
 
 from utils.load_data import MyDataloader
 from models.model import MyCDM_MLP_FFT
-from transformers import AdamW
+from utils.loss import cl_and_reg_loss_parallel
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 from tqdm.auto import tqdm
@@ -33,7 +33,8 @@ def parse_args():
 
     # 训练超参数
     parser.add_argument('--epoch', type=int, default=100, help='最大训练轮数')
-    # parser.add_argument('--bs', type=int, default=256, help='批次大小')
+    parser.add_argument('--bs', type=int, default=256, help='批次大小')
+    parser.add_argument('--seed', type=int, default=43, help='随机种子')
     # parser.add_argument('-lr', '--learning_rate', type=float, default=0.001, help='学习率')
 
     # 模型配置
@@ -64,7 +65,7 @@ def main_parallel(args):
     accelerator = Accelerator(
         mixed_precision='fp16',                         # 从参数读取或固定为'fp16'
         gradient_accumulation_steps=8,                  # args.grad_accum_steps,
-        deepspeed_plugin=args.deepspeed_plugin_config   # 此处会自动从配置文件读取
+        # deepspeed_plugin=args.deepspeed_plugin_config   # 此处会自动从配置文件读取
     )
     # 设置随机种子（确保多卡一致性）
     set_seed(args.seed)
@@ -131,19 +132,27 @@ def main_parallel(args):
     )
 
     # 创建两组参数：BERT和非BERT
-    bert_params = set(model.bert.parameters())
-    other_params = [p for p in model.parameters() if p not in bert_params]
-    # 设置优化器
-    optimizer = AdamW(
+    bert_params = list(model.bert.parameters())
+    # 使用参数ID进行比较
+    other_params = [p for p in model.parameters() if id(p) not in [id(bp) for bp in bert_params]]
+    # 设置优化器（Adam）
+    # optimizer = torch.optim.Adam(
+    #     [
+    #         {"params": bert_params, "lr": 2e-5},    # BERT使用较小学习率
+    #         {"params": other_params, "lr": 1e-3}    # 其他部分使用较大学习率
+    #     ]
+    # )
+    # 设置优化器（AdamW）
+    optimizer = torch.optim.AdamW(
         [
-            {"params": model.bert.parameters(), "lr": 2e-5},    # BERT使用较小学习率
-            {"params": other_params, "lr": 1e-3}                # CDM较大学习率
+            {"params": bert_params, "lr": 2e-5},    # BERT使用较小学习率
+            {"params": other_params, "lr": 1e-3}    # CDM较大学习率
         ],
         weight_decay=0.01
     )
+    
     # 使用accelerator准备组件（关键修改）
-    model, optimizer, train_loader, val_loader, test_loader = accelerator.prepare(
-        [model, optimizer, train_loader, val_loader, test_loader])
+    model, optimizer, train_loader, val_loader, test_loader = accelerator.prepare(model, optimizer, train_loader, val_loader, test_loader)
     # # 从模型中获取DeepSpeed自动创建的优化器
     # optimizer = model.optimizer  # 此时优化器参数由ds_config定义（如lr=1e-3）
     # </editor-fold>
@@ -179,7 +188,7 @@ def main_parallel(args):
             print(now.strftime("%Y-%m-%d %H:%M:%S"), f', training epoch {epoch + 1}')
 
         # （1）训练 & 可视化
-        train_total_loss, train_pred_loss, train_cl_loss, train_reg_loss = train_parallel(accelerator, model, train_loader, optimizer)
+        train_total_loss, train_pred_loss, train_cl_loss, train_reg_loss = train_parallel(accelerator, model, train_loader, optimizer, args)
 
         """后续过程均在主进程中进行"""
         if accelerator.is_main_process:
@@ -281,7 +290,7 @@ def main_parallel(args):
     }
 
 
-def train_parallel(_accelerator, _model, _train_loader, _optimizer):  # , _device, verbose=0
+def train_parallel(_accelerator, _model, _train_loader, _optimizer, _args):  # , _device, verbose=0
     """
     并行训练函数
     """
@@ -294,14 +303,7 @@ def train_parallel(_accelerator, _model, _train_loader, _optimizer):  # , _devic
     progress_bar = tqdm(_train_loader, desc="Training", disable=not _accelerator.is_local_main_process)
     _device = _accelerator.device
 
-    # count = 0
     for batch in progress_bar:
-        # # 进度可视化（改为使用进度条）
-        # if _accelerator.is_main_process and verbose and (count + 1) % 200 == 0:
-        #     _now = datetime.now()
-        #     print(f'{_now.strftime("%Y-%m-%d %H:%M:%S")}, {count+1} of {len(_train_loader)}')
-        # count += 1
-
         # 处理batch数据，组装为bert模型输入格式
         stu_ids = batch['stu_id'].to(_device)                 # 学生ID
         labels = batch['label'].to(_device).float()           # 响应真实值
@@ -310,8 +312,22 @@ def train_parallel(_accelerator, _model, _train_loader, _optimizer):  # , _devic
         exer_in = {'input_ids': input_ids, 'attention_mask': attention_mask}  # 组装为bert模型输入格式
 
         _optimizer.zero_grad()                                # 梯度清零
-        output = _model(stu_ids, exer_in)                     # 前向传播
-        loss, loss_bce, loss_cl, loss_reg  = _model.get_loss(output, labels)
+        model_output= _model(stu_ids, exer_in)                # 前向传播
+
+        # (1)使用.module访问原始模型的方法
+        # if hasattr(_model, 'module'):
+        #     # 分布式训练模式
+        #     loss, loss_bce, loss_cl, loss_reg = _model.module.get_loss(model_output, labels)
+        # else:
+        #     loss, loss_bce, loss_cl, loss_reg  = _model.get_loss(model_output, labels)
+
+        # (2)将forward所有输出的后续计算整合到损失函数中
+        preds, exer_emb, u_pos, u_neg = model_output
+        loss, loss_bce, loss_cl, loss_reg = cl_and_reg_loss_parallel(
+            exer_emb, preds, u_pos, u_neg, labels, tau=_args.tau, 
+            lambda_cl=_args.lambda_cl, lambda_reg=_args.lambda_reg
+            )
+
         _accelerator.backward(loss)                           # 反向传播
         _optimizer.step()                                     # 优化器调整权重
 

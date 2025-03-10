@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 
 
 def custom_loss(q, u_plus, u_minus, y, tau, norm=False, delta=None):
@@ -60,7 +61,7 @@ def custom_loss(q, u_plus, u_minus, y, tau, norm=False, delta=None):
     return loss_contrast, loss_reg
 
 
-def cl_and_reg_loss(q, u_plus, u_minus, y, tau=0.1, delta=0.1, norm=True):
+def cl_and_reg_loss(q, u_plus, u_minus, y, tau=0.1):
     """简化版自定义对比损失函数"""
 
     # def huber_smooth(x):
@@ -90,3 +91,36 @@ def cl_and_reg_loss(q, u_plus, u_minus, y, tau=0.1, delta=0.1, norm=True):
     # 返回对比损失&正则化损失
     return loss_contrast, loss_reg
 
+
+def cl_and_reg_loss_parallel(q, y_hat, u_plus, u_minus, y, tau=0.1, lambda_cl=0.5, lambda_reg=1.0):
+    """
+    简化版自定义对比损失函数(并行)
+    """
+    bce = nn.BCELoss(reduction='mean')(y_hat, y.squeeze())
+    
+    # 计算正负样本相似度（点积）并缩放
+    s_pos = torch.cosine_similarity(q, u_plus, dim=1, eps=1e-8) / tau   # (bs,)
+    s_neg = torch.cosine_similarity(q, u_minus, dim=1, eps=1e-8) / tau  # (bs,)
+
+
+    # 计算对数概率（数值稳定版）
+    log_sum_exp = torch.logsumexp(torch.stack([s_pos, s_neg]), dim=0)  # (2,bs) -> (bs,)
+    log_prob_pos = s_pos - log_sum_exp                                 # log(exp(s_pos)/sum)
+    log_prob_neg = s_neg - log_sum_exp                                 # log(exp(s_neg)/sum)
+
+    # 对比损失项
+    term_per_sample = y * log_prob_pos + (1 - y) * log_prob_neg
+    loss_contrast = -term_per_sample.mean()
+
+    # 正则化项（余弦相似度绝对值的均值）
+    loss_reg = torch.abs(torch.cosine_similarity(u_plus, u_minus, dim=1, eps=1e-8)).mean()
+
+    # 计算总损失
+    # 总损失
+    if lambda_cl < 1:
+        total_loss = (1-lambda_cl)*bce + lambda_cl*loss_contrast + lambda_reg*loss_reg
+    else:
+        total_loss = bce + lambda_cl*loss_contrast + lambda_reg*loss_reg
+
+    # 返回对比损失&正则化损失
+    return total_loss, bce, loss_contrast, loss_reg
