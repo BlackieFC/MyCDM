@@ -191,5 +191,8 @@ with open(f'{root_path}/test.json', 'w', encoding='utf-8') as f:
 
 
 # <editor-fold desc="文本信息处理，准备好分词和嵌入结果">
+"""
+将D:/Datasets/MOOCRadar/problem_content.json通过几个embedder脚本进行处理即可
+"""
 pass
 # </editor-fold>
