@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 from utils.load_data import MyDataloader
-from models.model import Baseline_IRT, Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT, MyCDM_MLP_FFT
+from models.model import Baseline_IRT, Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT, MyCDM_MLP_FFT, Basiline_MLP_FFT
 from tqdm.auto import tqdm
 
 
@@ -293,12 +293,18 @@ def main(args):
 
     else:  # 'fine-tune'
         dict_token = exer_tokens_path  # 同上，影响dataloader的具体形式
-        model = MyCDM_MLP_FFT(num_students=student_n,
-                              bert_model_name=args.bert_path,
-                              tau=args.tau,
-                              lambda_reg=args.lambda_reg,
-                              lambda_cl=args.lambda_cl,
-                              ).to(device)
+        # model = MyCDM_MLP_FFT(num_students=student_n,
+        #                       bert_model_name=args.bert_path,
+        #                       tau=args.tau,
+        #                       lambda_reg=args.lambda_reg,
+        #                       lambda_cl=args.lambda_cl,
+        #                       ).to(device)
+        model = Basiline_MLP_FFT(num_students=student_n,
+                                 bert_model_name=args.bert_path,
+                                 tau=args.tau,
+                                 lambda_reg=args.lambda_reg,
+                                 lambda_cl=args.lambda_cl,
+                                 ).to(device)
 
         # 设置优化器（全量微调bert，设置分段学习率）—— 此时命令行传入的lr参数无效！
         bert_params = list(model.bert.parameters())
