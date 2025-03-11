@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = '5'
+os.environ["CUDA_VISIBLE_DEVICES"] = '3'
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 from utils.load_data import MyDataloader
-from models.model import Baseline_IRT, Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT, MyCDM_MLP_FFT, Basiline_MLP_FFT
+from models.model import Baseline_IRT, Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT, MyCDM_MLP_FFT, Basiline_MLP_FFT, Baseline_FFT
 from tqdm.auto import tqdm
 
 
@@ -38,7 +38,10 @@ def parse_args():
 
     # 模型配置
     parser.add_argument('--bert_path', type=str, help='BERT预训练模型路径',
-                        default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+                        # default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased'          # BERT
+                        default='/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base'   # RoBERTa
+                        # default='/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5'                        # BGE
+                        )
     parser.add_argument('--tau', type=float, default=0.1, help='温度系数')
     parser.add_argument('--lambda_cl', type=int, default=0.5, help='对比损失权重')
     parser.add_argument('--lambda_reg', type=int, default=1.0, help='正则损失权重')
@@ -293,18 +296,27 @@ def main(args):
 
     else:  # 'fine-tune'
         dict_token = exer_tokens_path  # 同上，影响dataloader的具体形式
+
         # model = MyCDM_MLP_FFT(num_students=student_n,
         #                       bert_model_name=args.bert_path,
         #                       tau=args.tau,
         #                       lambda_reg=args.lambda_reg,
         #                       lambda_cl=args.lambda_cl,
         #                       ).to(device)
-        model = Basiline_MLP_FFT(num_students=student_n,
-                                 bert_model_name=args.bert_path,
-                                 tau=args.tau,
-                                 lambda_reg=args.lambda_reg,
-                                 lambda_cl=args.lambda_cl,
-                                 ).to(device)
+
+        # model = Basiline_MLP_FFT(num_students=student_n,
+        #                          bert_model_name=args.bert_path,
+        #                          tau=args.tau,
+        #                          lambda_reg=args.lambda_reg,
+        #                          lambda_cl=args.lambda_cl,
+        #                          ).to(device)
+        
+        model = Baseline_FFT(num_students=student_n,
+                             bert_model_name=args.bert_path,
+                             tau=args.tau,
+                             lambda_reg=args.lambda_reg,
+                             lambda_cl=args.lambda_cl,
+                             ).to(device)
 
         # 设置优化器（全量微调bert，设置分段学习率）—— 此时命令行传入的lr参数无效！
         bert_params = list(model.bert.parameters())

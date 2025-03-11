@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import BertModel, BertTokenizer
+from transformers import BertModel, BertTokenizer, AutoModel, AutoTokenizer, XLMRobertaTokenizer, XLMRobertaModel
 from peft import LoraConfig, get_peft_model
 import numpy as np
 from utils.loss import custom_loss, cl_and_reg_loss
@@ -1240,3 +1240,81 @@ class Basiline_MLP_FFT(nn.Module):
         reg_loss = torch.zeros_like(bce_loss, requires_grad=False)
         total_loss = bce_loss + cl_loss + reg_loss
         return total_loss, bce_loss, cl_loss, reg_loss
+
+
+class Baseline_FFT(nn.Module):
+    """
+    使用全量微调基础模型，需要把题目文本组织为字典形式的分词结果作为模型输入
+        # 全量微调模式下，所有模型参数都可以训练，不需要冻结参数
+        # 默认情况下，所有参数都已经是requires_grad=True的状态
+    """
+    def __init__(self, num_students, model_name=None, tau=0.1, lambda_reg=1.0, lambda_cl=0.5):
+        super().__init__()
+        # self.tau = tau
+        # self.lambda_reg = lambda_reg
+        # self.lambda_cl = lambda_cl
+
+        # 根据选择加载不同的模型
+        if 'roberta' in model_name.lower():
+            self.model = XLMRobertaModel.from_pretrained(model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base')
+        elif 'bge' in model_name.lower():
+            self.model = AutoModel.from_pretrained(model_name or '/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5')
+        elif 'bert' in model_name.lower():
+            self.model = BertModel.from_pretrained(model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+        else:
+            raise ValueError(f"不支持的模型类型: {model_name}，请选择 'BERT', 'RoBERTa' 或 'BGE'")
+            
+        # 解冻所有参数
+        for param in self.model.parameters():
+            param.requires_grad = True
+        self.d_model = self.model.config.hidden_size
+        # 学生能力嵌入层（u+和u-）
+        self.stu_pos = nn.Embedding(
+            num_embeddings=num_students,
+            embedding_dim=self.d_model
+        )
+        # self.stu_neg = nn.Embedding(
+        #     num_embeddings=num_students,
+        #     embedding_dim=self.d_model
+        # )
+        # MLP预测头
+        self.prednet = nn.Sequential(
+            nn.Linear(2 * self.d_model, 2 * self.d_model),
+            nn.Sigmoid(),
+            nn.Dropout(p=0.5),
+            nn.Linear(2 * self.d_model, self.d_model),
+            nn.Sigmoid(),
+            nn.Dropout(p=0.5),
+            nn.Linear(self.d_model, 1)
+        )
+        # 初始化参数
+        self.initialize()
+
+    def initialize(self):
+        """参数初始化"""
+        nn.init.normal_(self.stu_pos.weight, mean=0.0, std=0.1)
+        # nn.init.normal_(self.stu_neg.weight, mean=0.0, std=0.1)
+        # self.prednet
+        for module in self.prednet:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+
+    def forward(self, stu_ids, exer_in):
+        # 学生的正负双模态表征
+        u_pos = self.stu_pos(stu_ids)        # [batch_size, 768]
+        # u_neg = self.stu_neg(stu_ids)      # [batch_size, 768]
+        # 题目表征
+        bert_output = self.model(            # [batch_size, 768]，提取CLS token作为题目嵌入
+            input_ids=exer_in["input_ids"],
+            attention_mask=exer_in["attention_mask"])
+        exer_emb = bert_output.last_hidden_state[:, 0, :]
+
+        """MLP预测头（1）不与问题交互"""
+        # stu_emb = u_pos - u_neg                                       # [batch_size, 768]
+        # logits = self.prednet(torch.cat([exer_emb, stu_emb], dim=1))  # [batch_size, 1]
+        """MLP预测头（2）与问题交互"""
+        logits = self.prednet(torch.cat([exer_emb, u_pos], dim=1))      # [batch_size, 1]
+        output = torch.sigmoid(logits).squeeze(-1)                      # [batch_size]
+
+        return output, exer_emb, u_pos, u_pos
