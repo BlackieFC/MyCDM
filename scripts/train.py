@@ -32,14 +32,14 @@ def parse_args():
     parser.add_argument('--scenario', type=str, default='all', choices=['all', 'Algebra', 'Algebra_cold', 'GeometryandMeasure', 'Number', 'student_all', 'student_cut'], help='情景')
 
     # 训练超参数
-    parser.add_argument('--bs', type=int, default=256, help='批次大小')
+    parser.add_argument('--bs', type=int, default=512, help='批次大小')
     parser.add_argument('--epoch', type=int, default=100, help='最大训练轮数')
     parser.add_argument('-lr', '--learning_rate', type=float, default=0.001, help='学习率')
 
     # 模型配置
     parser.add_argument('--bert_path', type=str, help='BERT预训练模型路径',
-                        # default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased'          # BERT
-                        default='/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base'   # RoBERTa
+                        default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased'          # BERT
+                        # default='/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base'   # RoBERTa
                         # default='/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5'                        # BGE
                         )
     parser.add_argument('--tau', type=float, default=0.1, help='温度系数')

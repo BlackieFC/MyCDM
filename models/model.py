@@ -1337,29 +1337,29 @@ class Baseline_IRT_FFT(nn.Module):
         # 全量微调模式下，所有模型参数都可以训练，不需要冻结参数
         # 默认情况下，所有参数都已经是requires_grad=True的状态
     """
-    def __init__(self, num_students, model_name=None, tau=0.1, lambda_reg=1.0, lambda_cl=0.5, a_range=1.702):
+    def __init__(self, num_students, bert_model_name=None, tau=0.1, lambda_reg=1.0, lambda_cl=0.5, a_range=1.702):
         super().__init__()
         self.a_range = a_range
 
         # 根据选择加载不同的模型
-        if 'roberta' in model_name.lower():
-            self.model = XLMRobertaModel.from_pretrained(model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base')
-        elif 'bge' in model_name.lower():
-            self.model = AutoModel.from_pretrained(model_name or '/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5')
-        elif 'bert' in model_name.lower():
-            self.model = BertModel.from_pretrained(model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+        if 'roberta' in bert_model_name.lower():
+            self.bert = XLMRobertaModel.from_pretrained(bert_model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base')
+        elif 'bge' in bert_model_name.lower():
+            self.bert = AutoModel.from_pretrained(bert_model_name or '/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5')
+        elif 'bert' in bert_model_name.lower():
+            self.bert = BertModel.from_pretrained(bert_model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
         else:
-            raise ValueError(f"不支持的模型类型: {model_name}，请选择 'BERT', 'RoBERTa' 或 'BGE'")
+            raise ValueError(f"不支持的模型类型: {bert_model_name}，请选择 'BERT', 'RoBERTa' 或 'BGE'")
             
         # 解冻所有参数
-        for param in self.model.parameters():
+        for param in self.bert.parameters():
             param.requires_grad = True
-        self.d_model = self.model.config.hidden_size
+        self.d_model = self.bert.config.hidden_size
 
         # 学生能力嵌入层
         self.stu_emb = nn.Embedding(
             num_embeddings=num_students,
-            embedding_dim=self.d_model
+            embedding_dim=1  # self.d_model
         )
         # IRT参数映射层
         self.proj_disc = nn.Linear(self.d_model, 1)  # 区分度
@@ -1375,13 +1375,13 @@ class Baseline_IRT_FFT(nn.Module):
         for module in [self.proj_disc, self.proj_diff, self.proj_guess]:
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
-                nn.init.xavier_uniform_(module.bias)
+                nn.init.zeros_(module.bias)
         
     def forward(self, stu_ids, exer_in):
         # 学生能力表征
         theta = self.stu_emb(stu_ids)                   # [batch_size, d_model]
         # 题目表征
-        bert_output = self.model(                       # [batch_size, d_model]，提取CLS token作为题目嵌入
+        bert_output = self.bert(                       # [batch_size, d_model]，提取CLS token作为题目嵌入
             input_ids=exer_in["input_ids"],
             attention_mask=exer_in["attention_mask"])
         exer_emb = bert_output.last_hidden_state[:, 0]  # 等价于[:, 0, :]
@@ -1393,7 +1393,7 @@ class Baseline_IRT_FFT(nn.Module):
         """三参数IRT预测头"""
         output = guess + (1 - guess) / (1 + torch.exp(-self.a_range * disc * (theta - diff)))
 
-        return output, exer_emb, theta, theta
+        return output.squeeze(-1), exer_emb, theta, theta
     
     @staticmethod
     def get_loss(output, labels):
