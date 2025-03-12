@@ -1318,3 +1318,89 @@ class Baseline_FFT(nn.Module):
         output = torch.sigmoid(logits).squeeze(-1)                      # [batch_size]
 
         return output, exer_emb, u_pos, u_pos
+    
+    @staticmethod
+    def get_loss(output, labels):
+        """计算总损失"""
+        preds, _, _, _ = output
+        bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size], BCE损失
+        cl_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        reg_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        total_loss = bce_loss + cl_loss + reg_loss
+        return total_loss, bce_loss, cl_loss, reg_loss
+
+
+class Baseline_IRT_FFT(nn.Module):
+    """
+    (预报头使用三参数IRT)
+    使用全量微调基础模型，需要把题目文本组织为字典形式的分词结果作为模型输入
+        # 全量微调模式下，所有模型参数都可以训练，不需要冻结参数
+        # 默认情况下，所有参数都已经是requires_grad=True的状态
+    """
+    def __init__(self, num_students, model_name=None, tau=0.1, lambda_reg=1.0, lambda_cl=0.5, a_range=1.702):
+        super().__init__()
+        self.a_range = a_range
+
+        # 根据选择加载不同的模型
+        if 'roberta' in model_name.lower():
+            self.model = XLMRobertaModel.from_pretrained(model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base')
+        elif 'bge' in model_name.lower():
+            self.model = AutoModel.from_pretrained(model_name or '/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5')
+        elif 'bert' in model_name.lower():
+            self.model = BertModel.from_pretrained(model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+        else:
+            raise ValueError(f"不支持的模型类型: {model_name}，请选择 'BERT', 'RoBERTa' 或 'BGE'")
+            
+        # 解冻所有参数
+        for param in self.model.parameters():
+            param.requires_grad = True
+        self.d_model = self.model.config.hidden_size
+
+        # 学生能力嵌入层
+        self.stu_emb = nn.Embedding(
+            num_embeddings=num_students,
+            embedding_dim=self.d_model
+        )
+        # IRT参数映射层
+        self.proj_disc = nn.Linear(self.d_model, 1)  # 区分度
+        self.proj_diff = nn.Linear(self.d_model, 1)  # 难度
+        self.proj_guess = nn.Linear(self.d_model, 1)  # 猜测
+
+        # 初始化参数
+        self.initialize()
+
+    def initialize(self):
+        """参数初始化"""
+        nn.init.xavier_uniform_(self.stu_emb.weight)
+        for module in [self.proj_disc, self.proj_diff, self.proj_guess]:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.xavier_uniform_(module.bias)
+        
+    def forward(self, stu_ids, exer_in):
+        # 学生能力表征
+        theta = self.stu_emb(stu_ids)                   # [batch_size, d_model]
+        # 题目表征
+        bert_output = self.model(                       # [batch_size, d_model]，提取CLS token作为题目嵌入
+            input_ids=exer_in["input_ids"],
+            attention_mask=exer_in["attention_mask"])
+        exer_emb = bert_output.last_hidden_state[:, 0]  # 等价于[:, 0, :]
+        # 题目参数
+        disc = torch.sigmoid(self.proj_disc(exer_emb))
+        diff = self.proj_diff(exer_emb)
+        guess = torch.sigmoid(self.proj_guess(exer_emb)) * 0.5
+
+        """三参数IRT预测头"""
+        output = guess + (1 - guess) / (1 + torch.exp(-self.a_range * disc * (theta - diff)))
+
+        return output, exer_emb, theta, theta
+    
+    @staticmethod
+    def get_loss(output, labels):
+        """计算总损失"""
+        preds, _, _, _ = output
+        bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size], BCE损失
+        cl_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        reg_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        total_loss = bce_loss + cl_loss + reg_loss
+        return total_loss, bce_loss, cl_loss, reg_loss

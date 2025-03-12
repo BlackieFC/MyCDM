@@ -1,3 +1,4 @@
+"""KCD项目需要使用的文本嵌入脚本"""
 from transformers import AutoTokenizer, AutoModel
 import torch
 import numpy as np
