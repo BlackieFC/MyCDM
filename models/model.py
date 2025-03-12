@@ -1404,3 +1404,215 @@ class Baseline_IRT_FFT(nn.Module):
         reg_loss = torch.zeros_like(bce_loss, requires_grad=False)
         total_loss = bce_loss + cl_loss + reg_loss
         return total_loss, bce_loss, cl_loss, reg_loss
+
+
+"""Pipeline 部分"""
+
+
+class IRT(nn.Module):
+    """
+    IRT
+    """
+    def __init__(self, student_n, exer_n, ratio=1.703, a_range=1, sigmoid=False):
+        """
+        :param student_n: 学生数
+        :param exer_n   : 题目数
+        :param d_model  : 嵌入特征维度
+        :param ratio    : 指数倍率因子
+        :param exer_emb : 题目嵌入张量
+        :param n_choice : 题目选项数
+        :param a_range  : 区分度取值范围
+        """
+        self.student_n = student_n
+        self.exer_n = exer_n
+        self.ratio = ratio
+        self.a_range = a_range
+        self.sigmoid = sigmoid
+
+        super(IRT, self).__init__()
+
+        # 嵌入层
+        self.student_emb = nn.Embedding(self.student_n, 1)
+        self.proj_disc = nn.Embedding(self.exer_n, 1)    # exer_id -> a
+        self.proj_diff = nn.Embedding(self.exer_n, 1)    # exer_id -> b
+
+        # initialization
+        for name, param in self.named_parameters():
+            if 'weight' in name and param.requires_grad:
+                nn.init.xavier_normal_(param)
+
+    def forward(self, stu_id, exer_id):
+        """
+        :param stu_id: LongTensor
+        :param exer_id: LongTensor
+        :return: FloatTensor, the probabilities of answering correctly
+        """
+        # 映射为具体项
+        theta = self.student_emb(stu_id)
+        a = torch.sigmoid(self.proj_disc(exer_id)) * self.a_range
+        b = self.proj_diff(exer_id)
+        if self.sigmoid:
+            theta = torch.sigmoid(theta)
+            b = torch.sigmoid(b)
+        # 交互函数
+        output = 1 / (1 + torch.exp(-self.ratio * a * (theta - b)))
+
+        return output.squeeze(), b, theta
+    
+    @staticmethod
+    def get_loss(output, labels):
+        """计算总损失"""
+        preds, _, _ = output
+        bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size], BCE损失
+        cl_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        reg_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        total_loss = bce_loss + cl_loss + reg_loss
+        return total_loss, bce_loss, cl_loss, reg_loss
+
+
+class MIRT(nn.Module):
+    """
+    MIRT
+    """
+    def __init__(self, student_n, exer_n, ratio=1.703, a_range=1, n_know=4):
+        """
+        :param student_n: 学生数
+        :param exer_n   : 题目数
+        :param n_know   : 知识表征维度数
+        :param ratio    : 指数倍率因子
+        :param a_range  : 区分度取值范围
+        """
+        super(MIRT, self).__init__()
+        self.student_n = student_n
+        self.exer_n = exer_n
+        self.n_know = n_know
+        self.ratio = ratio
+        self.a_range = a_range
+        # 嵌入层
+        self.stu_emb = nn.Embedding(self.student_n, self.n_know)   # stu_id -> theta
+        self.disc_emb = nn.Embedding(self.exer_n, self.n_know)     # exer_id -> a
+        self.diff_emb = nn.Embedding(self.exer_n, 1)               # exer_id -> b
+        # initialization
+        for name, param in self.named_parameters():
+            if 'weight' in name and param.requires_grad:
+                nn.init.xavier_normal_(param)
+
+    def forward(self, stu_id, exer_id):
+        """
+        :param stu_id: LongTensor
+        :param exer_id: LongTensor
+        :return: FloatTensor, the probabilities of answering correctly
+        """
+        # 映射为具体项
+        theta = self.stu_emb(stu_id)                              # 从能力表征范围的角度来说最好还是有明确范围比较好（sigmoid输出时候sigmoid也行）
+        a = torch.sigmoid(self.disc_emb(exer_id)) * self.a_range  # 区分度和猜测系数还是需要限定在0-1区间内的
+        b = self.diff_emb(exer_id)                                # 拆除sigmoid
+        output = 1 / (1 + self.ratio * torch.exp(-torch.sum(torch.multiply(a, theta), dim=-1, keepdim=True) + b))    # 交互函数
+        # b = b.repeat(1, theta.shape[-1])
+        # output = 1 / (1 + self.ratio * torch.exp(-torch.sum(torch.multiply(a, theta - b), dim=-1, keepdim=True)))
+        return output, self.get_exer_params(exer_id), self.get_knowledge_status(stu_id)
+
+    def get_knowledge_status(self, stu_id):
+        theta = torch.sigmoid(self.stu_emb(stu_id))               # 注意增加sigmoid
+        return theta.data
+
+    def get_exer_params(self, exer_id):
+        b = torch.sigmoid(self.diff_emb(exer_id))                 # 同样增加sigmoid
+        # a = torch.sigmoid(self.disc_emb(exer_id)) * self.a_range
+        return b.data  # , a.data
+    
+    @staticmethod
+    def get_loss(output, labels):
+        """计算总损失"""
+        preds, _, _ = output
+        bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size], BCE损失
+        cl_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        reg_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        total_loss = bce_loss + cl_loss + reg_loss
+        return total_loss, bce_loss, cl_loss, reg_loss
+
+
+class NCDM(nn.Module):
+    """
+    NeuralCDM
+    """
+    def __init__(self, student_n, exer_n, knowledge_n, a_range=1):
+        super(NCDM, self).__init__()
+        self.knowledge_dim = knowledge_n
+        self.exer_n = exer_n
+        self.student_n = student_n
+        self.stu_dim = self.knowledge_dim
+        self.prednet_input_len = self.knowledge_dim
+        self.prednet_len1, self.prednet_len2 = 512, 256  # changeable
+        self.a_range = a_range
+        # 嵌入层
+        self.student_emb = nn.Embedding(self.student_n, self.knowledge_dim)  # 学生嵌入
+        self.disc_emb = nn.Embedding(self.exer_n, 1)                         # exer_emb -> a
+        self.diff_emb = nn.Embedding(self.exer_n, self.knowledge_dim)        # exer_emb -> b
+        # MLP
+        self.prednet_full1 = nn.Linear(self.prednet_input_len, self.prednet_len1)
+        self.drop_1 = nn.Dropout(p=0.5)
+        self.prednet_full2 = nn.Linear(self.prednet_len1, self.prednet_len2)
+        self.drop_2 = nn.Dropout(p=0.5)
+        self.prednet_full3 = nn.Linear(self.prednet_len2, 1)
+        # initialization
+        for name, param in self.named_parameters():
+            if 'weight' in name and param.requires_grad:
+                nn.init.xavier_normal_(param)
+
+    def forward(self, stu_id, exer_id, kn_emb):
+        """
+        :param stu_id: LongTensor
+        :param exer_id: LongTensor
+        :param kn_emb: FloatTensor, the knowledge relevancy vectors
+        :return: FloatTensor, the probabilities of answering correctly
+        """
+        # before prednet
+        stu_emb = torch.sigmoid(self.student_emb(stu_id))
+        k_difficulty = torch.sigmoid(self.diff_emb(exer_id))
+        e_discrimination = torch.sigmoid(self.disc_emb(exer_id)) * self.a_range
+        # prednet
+        input_x = e_discrimination * (stu_emb - k_difficulty) * kn_emb
+        input_x = self.drop_1(torch.sigmoid(self.prednet_full1(input_x)))
+        input_x = self.drop_2(torch.sigmoid(self.prednet_full2(input_x)))
+        output = torch.sigmoid(self.prednet_full3(input_x))
+
+        return output, self.get_exer_params(exer_id), self.get_knowledge_status(stu_id)
+
+    def apply_clipper(self):
+        """训练流程中调用，保证mlp部分非负"""
+        clipper = NoneNegClipper()
+        self.prednet_full1.apply(clipper)
+        self.prednet_full2.apply(clipper)
+        self.prednet_full3.apply(clipper)
+
+    def get_knowledge_status(self, stu_id):
+        stat_emb = torch.sigmoid(self.student_emb(stu_id))
+        return stat_emb.data
+
+    def get_exer_params(self, exer_id):
+        exer_emb = self.exer_emb(exer_id)
+        k_difficulty = torch.sigmoid(self.proj_diff(exer_emb))
+        # e_discrimination = torch.sigmoid(self.proj_disc(exer_emb)) * self.a_range
+        return k_difficulty.data  # , e_discrimination.data
+    
+    @staticmethod
+    def get_loss(output, labels):
+        """计算总损失"""
+        preds, _, _ = output
+        bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size], BCE损失
+        cl_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        reg_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        total_loss = bce_loss + cl_loss + reg_loss
+        return total_loss, bce_loss, cl_loss, reg_loss
+
+
+class NoneNegClipper(object):
+    def __init__(self):
+        super(NoneNegClipper, self).__init__()
+
+    def __call__(self, module):
+        if hasattr(module, 'weight'):
+            w = module.weight.data
+            a = torch.relu(torch.neg(w))
+            w.add_(a)
