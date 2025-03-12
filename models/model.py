@@ -1337,24 +1337,29 @@ class Baseline_IRT_FFT(nn.Module):
         # 全量微调模式下，所有模型参数都可以训练，不需要冻结参数
         # 默认情况下，所有参数都已经是requires_grad=True的状态
     """
-    def __init__(self, num_students, bert_model_name=None, tau=0.1, lambda_reg=1.0, lambda_cl=0.5, a_range=1.702):
+    def __init__(self, num_students, bert_model_name=None, tau=0.1, lambda_reg=1.0, lambda_cl=0.5, a_range=1.702, emb_path=None):
         super().__init__()
         self.a_range = a_range
+        self.emb_path = emb_path
 
-        # 根据选择加载不同的模型
-        if 'roberta' in bert_model_name.lower():
-            self.bert = XLMRobertaModel.from_pretrained(bert_model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base')
-        elif 'bge' in bert_model_name.lower():
-            self.bert = AutoModel.from_pretrained(bert_model_name or '/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5')
-        elif 'bert' in bert_model_name.lower():
-            self.bert = BertModel.from_pretrained(bert_model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+        if emb_path is None:
+            # 根据选择加载不同的模型
+            if 'roberta' in bert_model_name.lower():
+                self.bert = XLMRobertaModel.from_pretrained(bert_model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base')
+            elif 'bge' in bert_model_name.lower():
+                self.bert = AutoModel.from_pretrained(bert_model_name or '/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5')
+            elif 'bert' in bert_model_name.lower():
+                self.bert = BertModel.from_pretrained(bert_model_name or '/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased')
+            else:
+                raise ValueError(f"不支持的模型类型: {bert_model_name}，请选择 'BERT', 'RoBERTa' 或 'BGE'")
+            # 解冻所有参数
+            for param in self.bert.parameters():
+                param.requires_grad = True
+            self.d_model = self.bert.config.hidden_size
         else:
-            raise ValueError(f"不支持的模型类型: {bert_model_name}，请选择 'BERT', 'RoBERTa' 或 'BGE'")
-            
-        # 解冻所有参数
-        for param in self.bert.parameters():
-            param.requires_grad = True
-        self.d_model = self.bert.config.hidden_size
+            # 题目文本嵌入层(不训练)
+            self.bert = self.get_exer_embed_layer()
+            self.d_model = 768 if 'base' in bert_model_name.lower() else 1024
 
         # 学生能力嵌入层
         self.stu_emb = nn.Embedding(
@@ -1376,16 +1381,27 @@ class Baseline_IRT_FFT(nn.Module):
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
+    
+    def get_exer_embed_layer(self):
+        """读取题目文本嵌入"""
+        kc_embeds = np.load(self.emb_path)
+        kc_embeds = torch.tensor(kc_embeds)                 # (948, d_model)
+        return nn.Embedding.from_pretrained(kc_embeds, freeze=True)
         
     def forward(self, stu_ids, exer_in):
         # 学生能力表征
-        theta = self.stu_emb(stu_ids)                   # [batch_size, d_model]
-        # 题目表征
-        bert_output = self.bert(                       # [batch_size, d_model]，提取CLS token作为题目嵌入
-            input_ids=exer_in["input_ids"],
-            attention_mask=exer_in["attention_mask"])
-        exer_emb = bert_output.last_hidden_state[:, 0]  # 等价于[:, 0, :]
-        # 题目参数
+        theta = self.stu_emb(stu_ids)                       # [batch_size, d_model]
+
+        # 题目表征（分为两种情况）
+        if self.emb_path is None:
+            bert_output = self.bert(                        # [batch_size, d_model]，提取CLS token作为题目嵌入
+                input_ids=exer_in["input_ids"],
+                attention_mask=exer_in["attention_mask"])
+            exer_emb = bert_output.last_hidden_state[:, 0]  # 等价于[:, 0, :]
+        else:
+            exer_emb = self.bert(exer_in)                   # [batch_size, d_model]
+        
+        # 映射为题目参数
         disc = torch.sigmoid(self.proj_disc(exer_emb))
         diff = self.proj_diff(exer_emb)
         guess = torch.sigmoid(self.proj_guess(exer_emb)) * 0.5

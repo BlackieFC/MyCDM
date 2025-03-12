@@ -300,6 +300,14 @@ def main(args):
         #                   emb_path=exer_embeds_path
         #                   ).to(device)
 
+        model = Baseline_IRT_FFT(num_students=student_n,
+                            # bert_model_name=args.bert_path,
+                            emb_path=exer_embeds_path,
+                            tau=args.tau,
+                            lambda_reg=args.lambda_reg,
+                            lambda_cl=args.lambda_cl,
+                            ).to(device)
+
         # 设置优化器
         optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
