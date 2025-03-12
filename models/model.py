@@ -1359,7 +1359,7 @@ class Baseline_IRT_FFT(nn.Module):
         else:
             # 题目文本嵌入层(不训练)
             self.bert = self.get_exer_embed_layer()
-            self.d_model = 768 if 'base' in bert_model_name.lower() else 1024
+            self.d_model = 768 if 'bert' in self.emb_path.lower() else 1024
 
         # 学生能力嵌入层
         self.stu_emb = nn.Embedding(
