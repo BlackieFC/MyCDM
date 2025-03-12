@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = '3'
+os.environ["CUDA_VISIBLE_DEVICES"] = '7'
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,7 +32,7 @@ def parse_args():
     parser.add_argument('--scenario', type=str, default='all', choices=['all', 'Algebra', 'Algebra_cold', 'GeometryandMeasure', 'Number', 'student_all', 'student_cut'], help='情景')
 
     # 训练超参数
-    parser.add_argument('--bs', type=int, default=512, help='批次大小')
+    parser.add_argument('--bs', type=int, default=256, help='批次大小')
     parser.add_argument('--epoch', type=int, default=100, help='最大训练轮数')
     parser.add_argument('-lr', '--learning_rate', type=float, default=0.001, help='学习率')
 
@@ -222,8 +222,17 @@ def main(args):
     train_path = f'{data_root}/train.json'
     val_path = f'{data_root}/val.json'
     test_path = f'{data_root}/test.json'
-    exer_embeds_path = f'{data_root}/exer_embeds_bert.npy'
-    exer_tokens_path = f'{data_root}/exer_tokens.json'
+    if 'roberta' in args.bert_path.lower():
+        exer_embeds_path = f'{data_root}/exer_embeds_roberta.npy'
+        exer_tokens_path = f'{data_root}/exer_tokens_roberta.json'
+    elif 'bge' in args.bert_path.lower():
+        exer_embeds_path = f'{data_root}/exer_embeds_bge.npy'
+        exer_tokens_path = f'{data_root}/exer_tokens_bge.json'
+    elif 'bert' in args.bert_path.lower():
+        exer_embeds_path = f'{data_root}/exer_embeds_bert.npy'
+        exer_tokens_path = f'{data_root}/exer_tokens_bert.json'
+    else:
+        raise ValueError(f"不支持的模型类型: {args.bert_path}，请选择 'BERT', 'RoBERTa' 或 'BGE'")
 
     # 读取数据配置
     with open(f'{data_root}/config.txt') as i_f:
