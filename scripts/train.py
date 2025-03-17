@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = '7'
+os.environ["CUDA_VISIBLE_DEVICES"] = '2'
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,8 +38,8 @@ def parse_args():
 
     # 模型配置
     parser.add_argument('--bert_path', type=str, help='BERT预训练模型路径',
-                        default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased'          # BERT
-                        # default='/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base'   # RoBERTa
+                        # default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased'          # BERT
+                        default='/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base'   # RoBERTa
                         # default='/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5'                        # BGE
                         )
     parser.add_argument('--tau', type=float, default=0.1, help='温度系数')
