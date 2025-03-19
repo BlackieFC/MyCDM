@@ -355,7 +355,7 @@ def val_or_test_parallel(_accelerator, _model, _data_loader):
 
 if __name__ == '__main__':
     """
-    accelerate launch --num_processes 4 --mixed_precision fp16 train.py --proj_name test_250319_00 --bs 256 --epoch 100 --scenario student_all
+    accelerate launch --num_processes=4 --num_machines=1 --mixed_precision fp16 train.py --proj_name test_250319_00 --bs 256 --epoch 100 --scenario student_all
     """
     args_in = parse_args()
     main_parallel(args_in)
