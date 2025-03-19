@@ -13,7 +13,7 @@ import torch.nn as nn
 from utils.load_data import MyDataloader
 from models.model import Baseline_FFT, Baseline_IRT_FFT  # 适配多种模型
 from accelerate import Accelerator
-from accelerate.utils import set_seed
+from accelerate.utils import set_seed, DistributedDataParallelKwargs
 from tqdm.auto import tqdm
 
 
@@ -58,7 +58,8 @@ def main_parallel(args):
     # 初始化Accelerator
     accelerator = Accelerator(
         mixed_precision='fp16',
-        gradient_accumulation_steps=8
+        gradient_accumulation_steps=8,
+        kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)]
     )
     # 设置随机种子（确保多卡一致性）
     set_seed(args.seed)
@@ -183,7 +184,7 @@ def main_parallel(args):
             print(f"{now}, training epoch {epoch + 1}")
 
         # 训练步骤 & 打印训练集性能（所有打印操作仅在主进程中进行）
-        train_total_loss = train_parallel(accelerator, model, train_loader, optimizer, args)
+        train_total_loss = train_parallel(accelerator, model, train_loader, optimizer)  # , args
         if accelerator.is_main_process:
             print(f"  Train Pred Loss: {train_total_loss:.4f}")
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -355,7 +356,7 @@ def val_or_test_parallel(_accelerator, _model, _data_loader):
 
 if __name__ == '__main__':
     """
-    accelerate launch --num_processes=4 --num_machines=1 --mixed_precision fp16 train.py --proj_name test_250319_00 --bs 256 --epoch 100 --scenario student_all
+    accelerate launch --num_processes=4 --num_machines=1 --mixed_precision fp16 train_parallel.py --proj_name test_250319_00 --bs 256 --epoch 100 --scenario student_all
     """
     args_in = parse_args()
     main_parallel(args_in)
