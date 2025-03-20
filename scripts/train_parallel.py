@@ -276,7 +276,24 @@ def main_parallel(args):
             })
 
         # 早停逻辑（主进程）
-        if accelerator.is_main_process:     
+        if accelerator.is_main_process:
+            # 每轮训练后将当前模型状态保存至last_checkpoint_path
+            accelerator.save_state(last_checkpoint_path)
+            
+            # 额外保存当前轮次信息，用于可能的断点续训
+            torch.save({
+                'epoch': epoch,
+                'current_val_auc': val_auc,
+                'current_val_acc': val_acc,
+                'current_val_loss': val_pred_loss,
+                'best_val_auc': best_val_auc,
+                'best_val_acc': best_val_acc,
+                'best_val_loss': best_val_loss,
+                'early_stop_counter': early_stop_counter,
+                'wandb_run_id': wandb_run_id if 'wandb_run_id' in locals() else None
+            }, os.path.join(last_checkpoint_path, "checkpoint_info.pt"))
+            
+            # 最佳模型保存逻辑
             if val_auc > best_val_auc:
                 best_val_auc = val_auc
                 best_val_acc = val_acc
