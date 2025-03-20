@@ -2,6 +2,7 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import random
 import argparse
 import torch
 import wandb
@@ -44,11 +45,11 @@ def parse_args():
     # 训练控制
     parser.add_argument('-esp', '--early_stop_patience', type=int, default=5, help='早停等待轮数')
     parser.add_argument('-ckpt', '--checkpoint_dir', type=str, default=None,
-                        help='检查点保存目录 (默认: ../checkpoints/{proj_name})')
+                        help='检查点保存目录 (默认: /mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/checkpoints/{proj_name})')
 
     _args = parser.parse_args()
     if _args.checkpoint_dir is None:
-        _args.checkpoint_dir = f'../checkpoints/{_args.proj_name}'
+        _args.checkpoint_dir = f'/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/checkpoints/{_args.proj_name}'
 
     return _args
 
@@ -87,8 +88,12 @@ def main_parallel(args):
 
     # 创建检查点目录（默认为 f'./checkpoints/{proj_name}'）
     os.makedirs(args.checkpoint_dir, exist_ok=True)
-    best_model_path = f'{args.checkpoint_dir}/best_model.pt'
-    last_checkpoint_path = f'{args.checkpoint_dir}/last_checkpoint.pt'
+    # # 单卡
+    # best_model_path = f'{args.checkpoint_dir}/best_model.pt'
+    # last_checkpoint_path = f'{args.checkpoint_dir}/last_checkpoint.pt'
+    # 多卡
+    best_model_path = f'{args.checkpoint_dir}/best_model/'
+    last_checkpoint_path = f'{args.checkpoint_dir}/last_checkpoint/'
 
     best_val_loss = float('inf')
     best_val_acc = 0.0
@@ -160,21 +165,53 @@ def main_parallel(args):
     )
 
     # 断点续训
-    if os.path.exists(last_checkpoint_path):
-        checkpoint = torch.load(last_checkpoint_path, map_location='cpu')
-        accelerator.unwrap_model(model).load_state_dict(checkpoint['model_state'])
-        optimizer.load_state_dict(checkpoint['optimizer_state'])
-        start_epoch = checkpoint['epoch'] + 1
-        best_val_loss = checkpoint['best_val_loss']
-        early_stop_counter = checkpoint['early_stop_counter']
-        print(f"加载检查点：从epoch {start_epoch}恢复训练，当前最佳val_loss={best_val_loss:.4f}")
+    scheduler = None  # 无学习率调度
+    try:
+        if os.path.exists(last_checkpoint_path):
+            print(f"发现检查点文件: {last_checkpoint_path}")
+            checkpoint = torch.load(last_checkpoint_path, map_location='cpu')
+            # 加载模型状态
+            accelerator.unwrap_model(model).load_state_dict(checkpoint['model_state'])
+            # 加载优化器状态
+            optimizer.load_state_dict(checkpoint['optimizer_state'])
+            # 如果存在学习率调度器并且检查点中保存了相关状态
+            if 'scheduler_state' in checkpoint and scheduler is not None:
+                scheduler.load_state_dict(checkpoint['scheduler_state'])
+            # 恢复训练状态
+            start_epoch = checkpoint['epoch'] + 1
+            best_val_loss = checkpoint['best_val_loss']
+            early_stop_counter = checkpoint['early_stop_counter']
+            # 恢复随机数状态以确保可重现性
+            if 'random_state' in checkpoint:
+                torch.set_rng_state(checkpoint['random_state'])
+                np.random.set_state(checkpoint['numpy_random_state'])
+                random.setstate(checkpoint['python_random_state'])
+            print(f"加载检查点：从epoch {start_epoch}恢复训练，当前最佳val_loss={best_val_loss:.4f}")
+        else:
+            print("未找到检查点文件，将从头开始训练")
+    except Exception as e:
+        print(f"加载检查点时出错: {str(e)}，将从头开始训练")
+        start_epoch = 0
+        best_val_loss = float('inf')
+        early_stop_counter = 0
 
+    # 初始化wandb
     if accelerator.is_main_process:
+        wandb_run_id = None
+        # 如果是恢复训练，尝试从检查点获取wandb运行ID
+        if start_epoch > 0 and os.path.exists(last_checkpoint_path):
+            checkpoint = torch.load(last_checkpoint_path, map_location='cpu')
+            if 'wandb_run_id' in checkpoint:
+                wandb_run_id = checkpoint['wandb_run_id']
+        
         wandb.init(
             project=args.proj_name,
             config={**vars(args)},
-            resume=bool(start_epoch > 0)
+            resume="allow" if start_epoch > 0 else None,
+            id=wandb_run_id
         )
+        # 将当前wandb运行ID保存至下一个检查点
+        wandb_run_id = wandb.run.id
 
     # 训练循环
     for epoch in range(start_epoch, args.epoch):
@@ -222,30 +259,48 @@ def main_parallel(args):
                 best_val_acc = val_acc
                 best_val_loss = val_pred_loss
                 early_stop_counter = 0
-                accelerator.save({
+                
+                # 为最佳模型创建目录(如果不存在)
+                best_model_dir = os.path.dirname(best_model_path)
+                os.makedirs(best_model_dir, exist_ok=True)
+                
+                # 使用accelerator.save_state()保存完整状态
+                accelerator.save_state(best_model_dir)
+                
+                # 额外保存一些自定义信息(可选)
+                torch.save({
                     'epoch': epoch,
-                    'model_state': accelerator.unwrap_model(model).state_dict(),
-                    'optimizer_state': optimizer.state_dict(),
-                    'best_val_auc': val_auc
-                }, best_model_path)
+                    'best_val_auc': val_auc,
+                    'best_val_acc': best_val_acc,
+                    'best_val_loss': best_val_loss
+                }, os.path.join(best_model_dir, "metrics.pt"))
             else:
                 early_stop_counter += 1
+                
             # 触发早停（主进程）
             if early_stop_counter >= args.early_stop_patience:
                 print(f"\n早停触发！连续{args.early_stop_patience}个epoch验证集无改进")
-                accelerator.save({
+                
+                # 为最后检查点创建目录
+                last_checkpoint_dir = os.path.dirname(last_checkpoint_path)
+                os.makedirs(last_checkpoint_dir, exist_ok=True)
+                
+                # 保存最终状态
+                accelerator.save_state(last_checkpoint_dir)
+                
+                # 额外保存早停信息
+                torch.save({
                     'epoch': epoch,
-                    'model_state': accelerator.unwrap_model(model).state_dict(),
-                    'optimizer_state': optimizer.state_dict(),
                     'best_val_auc': best_val_auc,
                     'early_stop_counter': early_stop_counter
-                }, last_checkpoint_path)
+                }, os.path.join(last_checkpoint_dir, "early_stop_info.pt"))
                 break
+
 
     # 最终测试
     if os.path.exists(best_model_path):
         # 加载最佳模型 & 进行测试
-        accelerator.load_state(best_model_path)
+        accelerator.load_state(os.path.dirname(best_model_path))
         test_pred_loss, test_acc, test_auc, y_pred, y_true = val_or_test_parallel(accelerator, model, test_loader)
         # 打印测试集性能（主进程）
         if accelerator.is_main_process:
