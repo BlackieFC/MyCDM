@@ -336,7 +336,7 @@ def main_parallel(args):
     # 最终测试
     if os.path.exists(best_model_path):
         # 加载最佳模型 & 进行测试
-        accelerator.load_state(os.path.dirname(best_model_path))
+        accelerator.load_state(best_model_path)
         test_pred_loss, test_acc, test_auc, y_pred, y_true = val_or_test_parallel(accelerator, model, test_loader)
         # 打印测试集性能（主进程）
         if accelerator.is_main_process:
