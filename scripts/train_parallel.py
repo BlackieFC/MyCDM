@@ -58,6 +58,7 @@ def main_parallel(args):
 
     # 初始化Accelerator
     accelerator = Accelerator(
+        # mixed_precision='no',  # 'fp16'
         mixed_precision='fp16',
         gradient_accumulation_steps=8,
         kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=True)]
@@ -155,6 +156,9 @@ def main_parallel(args):
             {"params": other_params, "lr": 1e-3}    # 其他部分使用较大学习率
         ]
     )
+
+    # optimizer = torch.optim.Adam(params=model.parameters(), lr=0.0001)
+
     # # 使用AdamW优化器
     # optimizer = torch.optim.AdamW(
     #     [
@@ -170,7 +174,6 @@ def main_parallel(args):
     )
 
     # 断点续训
-    scheduler = None  # 无学习率调度
     try:
         if os.path.exists(last_checkpoint_path):
             print(f"发现检查点目录: {last_checkpoint_path}")
