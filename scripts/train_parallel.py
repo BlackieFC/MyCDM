@@ -178,25 +178,24 @@ def main_parallel(args):
             accelerator.load_state(last_checkpoint_path)
             
             # 加载额外保存的信息
-            if os.path.exists(os.path.join(last_checkpoint_path, "early_stop_info.pt")):
-                extra_info = torch.load(os.path.join(last_checkpoint_path, "early_stop_info.pt"))
+            if os.path.exists(os.path.join(last_checkpoint_path, "checkpoint_info.pt")):
+                extra_info = torch.load(os.path.join(last_checkpoint_path, "checkpoint_info.pt"))
                 # 恢复训练状态
                 start_epoch = extra_info['epoch'] + 1
                 best_val_auc = extra_info['best_val_auc']
                 early_stop_counter = extra_info['early_stop_counter']
-                
                 # 尝试加载best_val_loss (如果存在)
                 best_val_loss = float('inf')
                 if 'best_val_loss' in extra_info:
                     best_val_loss = extra_info['best_val_loss']
-                
                 # 尝试加载best_val_acc (如果存在)
                 best_val_acc = 0
                 if 'best_val_acc' in extra_info:
                     best_val_acc = extra_info['best_val_acc']
-                    
+                # 打印恢复训练信息
                 print(f"加载检查点：从epoch {start_epoch}恢复训练，当前最佳val_auc={best_val_auc:.4f}")
             else:
+                # 未找到训练状态信息，将使用默认值
                 print("未找到训练状态信息，将使用默认值")
                 start_epoch = 0
                 best_val_auc = 0
@@ -222,8 +221,8 @@ def main_parallel(args):
     if accelerator.is_main_process:
         wandb_run_id = None
         # 如果是恢复训练，尝试从early_stop_info.pt获取wandb运行ID(如果存在)
-        if start_epoch > 0 and os.path.exists(os.path.join(last_checkpoint_path, "early_stop_info.pt")):
-            extra_info = torch.load(os.path.join(last_checkpoint_path, "early_stop_info.pt"))
+        if start_epoch > 0 and os.path.exists(os.path.join(last_checkpoint_path, "checkpoint_info.pt")):
+            extra_info = torch.load(os.path.join(last_checkpoint_path, "checkpoint_info.pt"))
             if 'wandb_run_id' in extra_info:
                 wandb_run_id = extra_info['wandb_run_id']
         
@@ -275,11 +274,11 @@ def main_parallel(args):
                 "epoch": epoch + 1,
             })
 
-        # 早停逻辑（主进程）
+        """保存检查点"""
         if accelerator.is_main_process:
-            # 每轮训练后将当前模型状态保存至last_checkpoint_path
-            accelerator.save_state(last_checkpoint_path)
-            
+
+            """(1)每轮训练后将当前模型状态保存至last_checkpoint_path"""
+            accelerator.save_state(last_checkpoint_path)  # 注意保存至last_checkpoint_path
             # 额外保存当前轮次信息，用于可能的断点续训
             torch.save({
                 'epoch': epoch,
@@ -291,47 +290,35 @@ def main_parallel(args):
                 'best_val_loss': best_val_loss,
                 'early_stop_counter': early_stop_counter,
                 'wandb_run_id': wandb_run_id if 'wandb_run_id' in locals() else None
-            }, os.path.join(last_checkpoint_path, "checkpoint_info.pt"))
+            }, os.path.join(last_checkpoint_path, "checkpoint_info.pt"))  # 注意保存至last_checkpoint_path
             
-            # 最佳模型保存逻辑
+            """(2)最佳模型保存逻辑"""
             if val_auc > best_val_auc:
                 best_val_auc = val_auc
                 best_val_acc = val_acc
                 best_val_loss = val_pred_loss
                 early_stop_counter = 0                
-                
                 # 使用accelerator.save_state()保存完整状态
-                accelerator.save_state(best_model_path)
-                
-                # 额外保存一些自定义信息(可选)
+                accelerator.save_state(best_model_path)  # 注意保存至best_model_path
+                # 额外保存一些自定义信息(可选，暂时与每轮保存的内容一致)
                 torch.save({
                     'epoch': epoch,
-                    'best_val_auc': best_val_auc,
-                    'best_val_acc': best_val_acc,
-                    'best_val_loss': best_val_loss,
-                    'wandb_run_id': wandb_run_id if 'wandb_run_id' in locals() else None
-                }, os.path.join(best_model_path, "metrics.pt"))
-            else:
-                early_stop_counter += 1
-                
-            # 触发早停（主进程）
-            if early_stop_counter >= args.early_stop_patience:
-                print(f"\n早停触发！连续{args.early_stop_patience}个epoch验证集无改进")
-                
-                # 保存最终状态
-                accelerator.save_state(last_checkpoint_path)
-                
-                # 额外保存早停信息，同时包含所有需要的状态信息供断点续训使用
-                torch.save({
-                    'epoch': epoch,
+                    'current_val_auc': val_auc,
+                    'current_val_acc': val_acc,
+                    'current_val_loss': val_pred_loss,
                     'best_val_auc': best_val_auc,
                     'best_val_acc': best_val_acc,
                     'best_val_loss': best_val_loss,
                     'early_stop_counter': early_stop_counter,
                     'wandb_run_id': wandb_run_id if 'wandb_run_id' in locals() else None
-                }, os.path.join(last_checkpoint_path, "early_stop_info.pt"))
+                }, os.path.join(best_model_path, "checkpoint_info.pt"))  # 注意保存至best_model_path
+            else:
+                early_stop_counter += 1
+                
+            """触发早停"""
+            if early_stop_counter >= args.early_stop_patience:
+                print(f"\n早停触发！连续{args.early_stop_patience}个epoch验证集无改进")
                 break
-
 
     # 最终测试
     if os.path.exists(best_model_path):
