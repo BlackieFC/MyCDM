@@ -312,6 +312,7 @@ def main_parallel(args):
                     'early_stop_counter': early_stop_counter,
                     'wandb_run_id': wandb_run_id if 'wandb_run_id' in locals() else None
                 }, os.path.join(best_model_path, "checkpoint_info.pt"))  # 注意保存至best_model_path
+                print(f"发现新最佳模型，val_auc={best_val_auc:.4f}，已保存至{best_model_path}")
             else:
                 early_stop_counter += 1
                 
