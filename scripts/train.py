@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 from utils.load_data import MyDataloader
-from models.model import Baseline_IRT, Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT, MyCDM_MLP_FFT, Basiline_MLP_FFT, Baseline_FFT, Baseline_IRT_FFT
+from models.model import Baseline_IRT, Baseline_MLP, MyCDM_MLP, IRT, MyCDM_MSA, MyCDM_IRT, MyCDM_MLP_FFT, Basiline_MLP_FFT, Baseline_FFT, Baseline_IRT_FFT 
 from tqdm.auto import tqdm
 
 
@@ -26,7 +26,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='模型训练参数配置')
 
     # 实验配置
-    parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='freeze', help='实验模式')
+    parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='fine-tune', help='实验模式')
     parser.add_argument('--proj_name', type=str, default='freeze_250221_00', help='项目名称，用于保存检查点')
     parser.add_argument('--data', type=str, default='NIPS34', choices=['NIPS34'], help='使用的数据集名称')
     parser.add_argument('--scenario', type=str, default='all', choices=['all', 'Algebra', 'Algebra_cold', 'GeometryandMeasure', 'Number', 'student_all', 'student_cut'], help='情景')
@@ -38,8 +38,8 @@ def parse_args():
 
     # 模型配置
     parser.add_argument('--bert_path', type=str, help='BERT预训练模型路径',
-                        # default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased'          # BERT
-                        default='/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base'   # RoBERTa
+                        default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased'            # BERT
+                        # default='/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base'   # RoBERTa
                         # default='/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5'                        # BGE
                         )
     parser.add_argument('--tau', type=float, default=0.1, help='温度系数')
@@ -337,9 +337,9 @@ def main(args):
         
         model = Baseline_IRT_FFT(num_students=student_n,
                                  bert_model_name=args.bert_path,
-                                 tau=args.tau,
-                                 lambda_reg=args.lambda_reg,
-                                 lambda_cl=args.lambda_cl,
+                                #  tau=args.tau,
+                                #  lambda_reg=args.lambda_reg,
+                                #  lambda_cl=args.lambda_cl,
                                  ).to(device)
 
         # 设置优化器（全量微调bert，设置分段学习率）—— 此时命令行传入的lr参数无效！
@@ -385,8 +385,9 @@ def main(args):
         # 覆盖相应的训练状态记录参数，打印
         start_epoch = checkpoint['epoch'] + 1
         best_val_loss = checkpoint['best_val_loss']
+        best_val_auc = checkpoint['best_val_auc']
         early_stop_counter = checkpoint['early_stop_counter']
-        print(f"加载检查点：从epoch {start_epoch}恢复训练，当前最佳val_loss={best_val_loss:.4f}")
+        print(f"加载检查点：从epoch {start_epoch}恢复训练，当前最佳val_loss={best_val_loss:.4f}，最佳val_auc={best_val_auc:.4f}")
 
     # 初始化wandb
     wandb.init(
@@ -417,7 +418,7 @@ def main(args):
         test_pred_loss, test_acc, test_auc, _, _ = val_or_test(model, test_loader, device, mode=args.mode, verbose=args.verbose)
         print(f"  Test Pred Loss: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
 
-        # 早停逻辑（改为AUC优先）
+        # 早停逻辑（AUC优先）
         if val_auc > best_val_auc:
             best_val_auc = val_auc
             best_val_acc = val_acc
@@ -428,22 +429,25 @@ def main(args):
                 'epoch': epoch,
                 'model_state': model.state_dict(),
                 'optimizer_state': optimizer.state_dict(),
-                'best_val_auc': best_val_auc
+                'best_val_auc': best_val_auc,
+                'best_val_loss': best_val_loss,
+                'early_stop_counter': early_stop_counter
             }, best_model_path)
             print(f"发现新最佳模型，val_auc={best_val_auc:.4f}，已保存至{best_model_path}")
         else:
             early_stop_counter += 1
 
-        # 保存最新检查点（用于断点续训）
+        # 每轮训练完成，均保存最新检查点（用于断点续训）
         torch.save({
             'epoch': epoch,
             'model_state': model.state_dict(),
             'optimizer_state': optimizer.state_dict(),
             'best_val_auc': best_val_auc,
+            'best_val_loss': best_val_loss,
             'early_stop_counter': early_stop_counter
         }, last_checkpoint_path)
 
-        # 记录训练和验证指标
+        # 记录训练和验证指标（更新：记录每一轮的test结果）
         wandb.log({
             "train/total_loss": train_total_loss,
             "train/pred_loss": train_pred_loss,
@@ -452,6 +456,9 @@ def main(args):
             "val/pred_loss": val_pred_loss,
             "val/acc": val_acc,
             "val/auc": val_auc,
+            "test/pred_loss": test_pred_loss,
+            "test/acc": test_acc,
+            "test/auc": test_auc,
             "epoch": epoch + 1,
             # "val/best_loss": best_val_loss,
             # "early_stop_counter": early_stop_counter
@@ -484,9 +491,9 @@ def main(args):
 
     # 记录测试结果
     wandb.log({
-        "test/pred_loss": test_pred_loss,
-        "test/acc": test_acc,
-        "test/auc": test_auc
+        "final/test_pred_loss": test_pred_loss,
+        "final/test_acc": test_acc,
+        "final/test_auc": test_auc
     })
 
     # 记录最终结果
