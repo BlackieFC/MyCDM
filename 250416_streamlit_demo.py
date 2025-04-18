@@ -3,36 +3,78 @@ import pandas as pd
 import glob
 import os
 import time
-from datetime import datetime
+import json
+
+
+# 处理KC名称信息为id2knowname
+know_map_path = "data/JZX_all_kp_map.csv"
+know_map = pd.read_csv(know_map_path)
+
+id2xueke = {}
+id2version = {}
+id2grade = {}
+id2knowname = {}
+qid2diff = {}
+for index,row in know_map.iterrows():
+    this_id = row["knowledge_id"]
+    qid2diff[this_id] = {}
+    this_grade = row["knowledge_grade"]
+    this_xueke = row["knowledge_subject"]
+    this_version = row["knowledge_version"]
+    id2xueke[this_id] = this_xueke
+    id2version[this_id] = this_version
+    id2grade[this_id] = this_grade
+    id2knowname[this_id] = row["knowledge_name"]
+    if pd.isna(row["knowledge_question_group"]):
+        continue
+    q_group = json.loads(row["knowledge_question_group"])
+    for sub_group in q_group:
+        this_diff = sub_group["difficulty"]
+        this_qs = sub_group["question_group"]
+        for sub_q in this_qs:
+            qid2diff[this_id][sub_q["question_id"]] = this_diff
+
 
 # 设置页面标题
-st.title("CSV数据可视化应用")
+st.title("精准学知识点学习路径可视化demo")
 
 # 设置固定路径
 FIXED_PATH = "data/results"  # 固定的本地路径，根据您的实际路径修改
+n_files = 100
 
+def load_all_csv_files(directory_path, max_files=None):
+    """读取目录下符合条件的CSV文件并合并为一个DataFrame
 
-def load_all_csv_files(directory_path):
-    """读取目录下所有CSV文件并合并为一个DataFrame"""
+    参数:
+        directory_path: 要读取的目录路径
+        max_files: 最多读取的文件数量，默认为None表示读取所有符合条件的文件
+    """
     try:
         all_files = glob.glob(os.path.join(directory_path, "*.csv"))
         if not all_files:
             st.error(f"在 {directory_path} 目录下没有找到CSV文件")
             return None
 
-        df_list = []
+        # 筛选出大于50KB的文件
+        valid_files = []
         for filename in all_files:
-            # 检查文件大小，过滤掉小于50KB的文件
             file_size_kb = os.path.getsize(filename) / 1024
-            if file_size_kb < 50:
-                continue
+            if file_size_kb >= 50:
+                valid_files.append(filename)
 
-            _df = pd.read_csv(filename)
-            df_list.append(_df)
-
-        if not df_list:
+        if not valid_files:
             st.error(f"没有找到大于50KB的CSV文件")
             return None
+
+        # 如果指定了max_files参数，则只取前max_files个文件
+        if max_files is not None and max_files > 0:
+            valid_files = valid_files[:max_files]
+            st.info(f"根据设置，只读取前{max_files}个符合条件的文件")
+
+        df_list = []
+        for filename in valid_files:
+            _df = pd.read_csv(filename)
+            df_list.append(_df)
 
         # 合并所有数据
         combined_df = pd.concat(df_list, ignore_index=True)
@@ -43,7 +85,7 @@ def load_all_csv_files(directory_path):
 
 
 # 加载数据
-df = load_all_csv_files(FIXED_PATH)
+df = load_all_csv_files(FIXED_PATH, max_files=n_files)
 if df is not None:
     st.success(f"成功加载 {len(df)} 行数据")
 
@@ -64,12 +106,12 @@ if df is not None:
             st.session_state.lit_order = []  # 用于记录点亮顺序
 
         # 创建下拉选择框，让用户从筛选后的A列的唯一值中选择
-        query_string = st.selectbox("请选择要查询的A列值:", filtered_tal_ids)
+        query_string = st.selectbox("请选择要查询的tal_id:", filtered_tal_ids)
 
         # 显示已点亮的图标
-        st.subheader("已点亮的图标")
+        st.subheader("知识点学习路径")
         if not st.session_state.lit_order:
-            st.info("尚未点亮任何图标")
+            st.info("尚未学习任何知识点")
         else:
             # 创建一个网格布局来显示已点亮的图标
             num_cols = 5  # 每行显示5个图标
@@ -108,24 +150,31 @@ if df is not None:
                 newly_lit = []  # 记录本次新点亮的图标
 
                 # 逐行点亮图标
+                count = 0
                 for _, row in sorted_rows.iterrows():
                     c_value = row['knowledge_id']
+                    c_value = int(c_value.strip("jzx1.5_zsd_"))
+                    if count < 10:
+                        # 如果能查到精准学KC名称 & 图标未点亮，则点亮它
+                        if c_value in id2knowname.keys() and not st.session_state.icon_states[c_value]:
+                            c_value = id2knowname[c_value]
+                            count += 1
 
-                    # 如果图标未点亮，则点亮它
-                    if not st.session_state.icon_states[c_value]:
-                        # 检查是否需要等待
-                        current_time = time.time()
-                        if last_lit_time and current_time - last_lit_time < 1.0:
-                            sleep_time = 1.0 - (current_time - last_lit_time)
-                            st.write(f"等待 {sleep_time:.2f} 秒...")
-                            time.sleep(sleep_time)
+                            # 检查是否需要等待
+                            current_time = time.time()
+                            if last_lit_time and current_time - last_lit_time < 1.0:
+                                sleep_time = 1.0 - (current_time - last_lit_time)
+                                st.write(f"等待 {sleep_time:.2f} 秒...")
+                                time.sleep(sleep_time)
 
-                        # 点亮图标
-                        st.session_state.icon_states[c_value] = True
-                        st.session_state.lit_order.append(c_value)  # 添加到点亮顺序列表
-                        newly_lit.append(c_value)
-                        st.write(f"点亮图标: {c_value}")
-                        last_lit_time = time.time()
+                            # 点亮图标
+                            st.session_state.icon_states[c_value] = True
+                            st.session_state.lit_order.append(c_value)  # 添加到点亮顺序列表
+                            newly_lit.append(c_value)
+                            st.write(f"点亮图标: {c_value}")
+                            last_lit_time = time.time()
+                    else:
+                        break
 
                 # 更新图标显示
                 if newly_lit:
