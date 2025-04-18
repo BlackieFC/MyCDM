@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = '2'
+os.environ["CUDA_VISIBLE_DEVICES"] = '1'
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import argparse
 import torch
 import wandb
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import accuracy_score, roc_auc_score, root_mean_squared_error
 import numpy as np
 from datetime import datetime
 import itertools
@@ -26,10 +26,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description='模型训练参数配置')
 
     # 实验配置
-    parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='fine-tune', help='实验模式')
+    parser.add_argument('--mode', choices=['baseline', 'freeze', 'fine-tune'], default='baseline', help='实验模式')
     parser.add_argument('--proj_name', type=str, default='freeze_250221_00', help='项目名称，用于保存检查点')
     parser.add_argument('--data', type=str, default='NIPS34', choices=['NIPS34'], help='使用的数据集名称')
-    parser.add_argument('--scenario', type=str, default='all', choices=['all', 'Algebra', 'Algebra_cold', 'GeometryandMeasure', 'Number', 'student_all', 'student_cut'], help='情景')
+    parser.add_argument('--scenario', type=str, default='all', 
+                        choices=['all', 'Algebra', 'Algebra_cold', 'GeometryandMeasure', 'Number', 'student_all', 'student_cut', 'student_all_f1', 'student_all_f2', 'student_all_f3', 'student_all_f4', 'student_all_f5'],
+                        help='情景')
 
     # 训练超参数
     parser.add_argument('--bs', type=int, default=512, help='批次大小')
@@ -38,8 +40,8 @@ def parse_args():
 
     # 模型配置
     parser.add_argument('--bert_path', type=str, help='BERT预训练模型路径',
-                        default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased'            # BERT
-                        # default='/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base'   # RoBERTa
+                        # default='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/bert-base-uncased'            # BERT
+                        default='/mnt/new_pfs/liming_team/auroraX/songchentao/MyCDM/roberta/xlm-roberta-base'   # RoBERTa
                         # default='/mnt/new_pfs/liming_team/auroraX/LLM/bge-large-en-v1.5'                        # BGE
                         )
     parser.add_argument('--tau', type=float, default=0.1, help='温度系数')
@@ -48,7 +50,7 @@ def parse_args():
 
     # 训练控制
     parser.add_argument('--grid_search', action='store_true', help='格点搜索调参')
-    parser.add_argument('-esp', '--early_stop_patience', type=int, default=5, help='早停等待轮数')
+    parser.add_argument('-esp', '--early_stop_patience', type=int, default=20, help='早停等待轮数')
     parser.add_argument('-ckpt', '--checkpoint_dir', type=str, default=None, help='检查点保存目录 (默认: ../checkpoints/{proj_name})')
     parser.add_argument('--verbose', type=int, default=0, help='是否显示epoch内进度')
 
@@ -161,10 +163,11 @@ def val_or_test(_model, _data_loader, _device, mode='baseline', verbose=0):
 
     # 二值化预测结果
     binary_preds = (all_preds >= 0.5).astype(int)
+    rmse = root_mean_squared_error(all_labels, all_preds)
     acc = accuracy_score(all_labels, binary_preds)
     auc = roc_auc_score(all_labels, all_preds)
 
-    return avg_pred_loss, acc, auc, all_preds, all_labels
+    return rmse, acc, auc, all_preds, all_labels
 
 
 def my_gridsearch(_args):
@@ -256,10 +259,10 @@ def main(args):
         dict_token = None  # 影响dataloader的具体形式
 
         # # BERT-IRT or BGE-IRT
-        # model = Baseline_IRT(num_students=student_n, emb_path=exer_embeds_path).to(device)
+        model = Baseline_IRT(num_students=student_n, emb_path=exer_embeds_path).to(device)
 
         # BERT-MLP or BGE-MLP
-        model = Baseline_MLP(num_students=student_n, emb_path=exer_embeds_path).to(device)
+        # model = Baseline_MLP(num_students=student_n, emb_path=exer_embeds_path).to(device)
 
         # # IRT
         # model = IRT(student_n, exer_n).to(device)
@@ -270,7 +273,17 @@ def main(args):
     elif args.mode == 'freeze':
         dict_token = None  # 同上，影响dataloader的具体形式
 
-        model = MyCDM_MLP(num_students=student_n,
+        # model = MyCDM_MLP(num_students=student_n,
+        #                   bert_model_name=args.bert_path,
+        #                   lora_rank=8,
+        #                   freeze=True,
+        #                   tau=args.tau,
+        #                   lambda_reg=args.lambda_reg,
+        #                   lambda_cl=args.lambda_cl,
+        #                   emb_path=exer_embeds_path
+        #                   ).to(device)
+        
+        model = MyCDM_IRT(num_students=student_n,
                           bert_model_name=args.bert_path,
                           lora_rank=8,
                           freeze=True,
@@ -280,34 +293,6 @@ def main(args):
                           emb_path=exer_embeds_path
                           ).to(device)
         
-        # model = MyCDM_IRT(num_students=student_n,
-        #                   bert_model_name=args.bert_path,
-        #                   lora_rank=8,
-        #                   freeze=True,
-        #                   tau=args.tau,
-        #                   lambda_reg=args.lambda_reg,
-        #                   lambda_cl=args.lambda_cl,
-        #                   emb_path=exer_embeds_path
-        #                   ).to(device)
-
-        # model = MyCDM_MSA(num_students=student_n,
-        #                   bert_model_name=args.bert_path,
-        #                   lora_rank=8,
-        #                   freeze=True,
-        #                   tau=args.tau,
-        #                   lambda_reg=args.lambda_reg,
-        #                   lambda_cl=args.lambda_cl,
-        #                   emb_path=exer_embeds_path
-        #                   ).to(device)
-
-        model = Baseline_IRT_FFT(num_students=student_n,
-                            # bert_model_name=args.bert_path,
-                            emb_path=exer_embeds_path,
-                            tau=args.tau,
-                            lambda_reg=args.lambda_reg,
-                            lambda_cl=args.lambda_cl,
-                            ).to(device)
-
         # 设置优化器
         optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
 
@@ -337,9 +322,9 @@ def main(args):
         
         model = Baseline_IRT_FFT(num_students=student_n,
                                  bert_model_name=args.bert_path,
-                                #  tau=args.tau,
-                                #  lambda_reg=args.lambda_reg,
-                                #  lambda_cl=args.lambda_cl,
+                                 #  tau=args.tau,
+                                 #  lambda_reg=args.lambda_reg,
+                                 #  lambda_cl=args.lambda_cl,
                                  ).to(device)
 
         # 设置优化器（全量微调bert，设置分段学习率）—— 此时命令行传入的lr参数无效！
@@ -411,12 +396,12 @@ def main(args):
         now = datetime.now()
         print(f'{now.strftime("%Y-%m-%d %H:%M:%S")}, validating epoch {epoch + 1}')
         val_pred_loss, val_acc, val_auc, _, _ = val_or_test(model, val_loader, device, mode=args.mode, verbose=args.verbose)
-        print(f"  Val Pred Loss: {val_pred_loss:.4f} Acc: {val_acc:.4f} AUC: {val_auc:.4f}")
+        print(f"  Val RMSE: {val_pred_loss:.4f} Acc: {val_acc:.4f} AUC: {val_auc:.4f}")
 
         now = datetime.now()
         print(f'{now.strftime("%Y-%m-%d %H:%M:%S")}, testing epoch {epoch + 1}')
         test_pred_loss, test_acc, test_auc, _, _ = val_or_test(model, test_loader, device, mode=args.mode, verbose=args.verbose)
-        print(f"  Test Pred Loss: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
+        print(f"  Test RMSE: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
 
         # 早停逻辑（AUC优先）
         if val_auc > best_val_auc:
@@ -430,7 +415,7 @@ def main(args):
                 'model_state': model.state_dict(),
                 'optimizer_state': optimizer.state_dict(),
                 'best_val_auc': best_val_auc,
-                'best_val_loss': best_val_loss,
+                'best_val_rmse': best_val_loss,
                 'early_stop_counter': early_stop_counter
             }, best_model_path)
             print(f"发现新最佳模型，val_auc={best_val_auc:.4f}，已保存至{best_model_path}")
@@ -443,7 +428,7 @@ def main(args):
             'model_state': model.state_dict(),
             'optimizer_state': optimizer.state_dict(),
             'best_val_auc': best_val_auc,
-            'best_val_loss': best_val_loss,
+            'best_val_rmse': best_val_loss,
             'early_stop_counter': early_stop_counter
         }, last_checkpoint_path)
 
@@ -453,10 +438,10 @@ def main(args):
             "train/pred_loss": train_pred_loss,
             "train/cl_loss": train_cl_loss,
             "train/reg_loss": train_reg_loss,
-            "val/pred_loss": val_pred_loss,
+            "val/rmse": val_pred_loss,
             "val/acc": val_acc,
             "val/auc": val_auc,
-            "test/pred_loss": test_pred_loss,
+            "test/rmse": test_pred_loss,
             "test/acc": test_acc,
             "test/auc": test_auc,
             "epoch": epoch + 1,
@@ -480,7 +465,7 @@ def main(args):
     test_pred_loss, test_acc, test_auc, y_pred, y_true = val_or_test(model, test_loader, device, mode=args.mode,
                                                                      verbose=args.verbose)
     print(f"\nFinal Test Results:")
-    print(f"  Test Pred Loss: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
+    print(f"  Test RMSE: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
 
     now = datetime.now()
     print(f'{now.strftime("%Y-%m-%d %H:%M:%S")}, finish.')
@@ -491,7 +476,7 @@ def main(args):
 
     # 记录测试结果
     wandb.log({
-        "final/test_pred_loss": test_pred_loss,
+        "final/test_rmse": test_pred_loss,
         "final/test_acc": test_acc,
         "final/test_auc": test_auc
     })
@@ -501,7 +486,7 @@ def main(args):
 
     # 返回验证集指标用于网格搜索比较
     return {
-        'val_loss': best_val_loss,
+        'val_rmse': best_val_loss,
         'val_acc': best_val_acc,
         'val_auc': best_val_auc
     }
@@ -509,6 +494,9 @@ def main(args):
 
 
 if __name__ == '__main__':
+    """
+    示例调用：python train.py --proj_name 250416_bert_base_stu_all_f1 --bs 256 --epoch 100 --scenario student_all_f1
+    """
 
     args_in = parse_args()
 

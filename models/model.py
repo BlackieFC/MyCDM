@@ -119,15 +119,14 @@ class Baseline_MLP(nn.Module):
         return total_loss, bce_loss, cl_loss, reg_loss
 
 
-class Baseline_IRT(nn.Module):
+class Baseline_IRT_backup(nn.Module):
     """
     IRT-Baseline模型函数：
         （1）题目输入：ID输入——nn.Embedding权重固定为BERT嵌入
         （2）学生表征：普通单嵌入
         （3）类IRT预测头
     """
-    def __init__(self, num_students,
-                 emb_path='/mnt/new_pfs/liming_team/auroraX/songchentao/llama/exer_text/nips34_KCandExer_emb.npy'):
+    def __init__(self, num_students, emb_path):
         """初始化模型结构"""
         super().__init__()
         self.emb_path = emb_path
@@ -182,7 +181,7 @@ class Baseline_IRT(nn.Module):
         # 学生嵌入
         proficiency = self.stu_emb(stu_ids)          # [batch_size, 1]
         # 题目嵌入
-        exer_emb = self.bert(exer_in)                # [batch_size, 768]
+        exer_emb = self.bert(exer_in)*10             # [batch_size, 768]
         # 类IRT预测头
         a = torch.sigmoid(self.proj_disc(exer_emb))  # [batch_size, 1]
         b = self.proj_diff(exer_emb)                 # [batch_size, 1]
@@ -1411,6 +1410,86 @@ class Baseline_IRT_FFT(nn.Module):
 
         return output.squeeze(-1), exer_emb, theta, theta
     
+    @staticmethod
+    def get_loss(output, labels):
+        """计算总损失"""
+        preds, _, _, _ = output
+        bce_loss = nn.BCELoss(reduction='mean')(preds, labels.squeeze())  # [batch_size], BCE损失
+        cl_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        reg_loss = torch.zeros_like(bce_loss, requires_grad=False)
+        total_loss = bce_loss + cl_loss + reg_loss
+        return total_loss, bce_loss, cl_loss, reg_loss
+
+
+class Baseline_IRT(nn.Module):
+    """
+    IRT-Baseline模型函数：
+        （1）题目输入：ID输入——nn.Embedding权重固定为BERT嵌入
+        （2）学生表征：普通单嵌入
+        （3）类IRT预测头
+    """
+    def __init__(self, num_students, emb_path, a_range=1.702):
+        """初始化模型结构"""
+        super().__init__()
+        self.emb_path = emb_path
+        self.bert = self.get_exer_embed_layer()    # nn.Embedding(948, 768)，固定的BERT嵌入
+        self.d_model = self.bert.weight.shape[1]   # IRT-Baseline中为映射层的输入维度
+        self.a_range = a_range
+
+        # proficiency：普通单嵌入
+        self.stu_emb = nn.Embedding(
+            num_embeddings=num_students,
+            embedding_dim=1                        # IRT-Baseline，特征维度为 1
+        )
+
+        # 题目难度和区分度映射层
+        self.proj_disc = nn.Linear(self.d_model, 1)
+        self.proj_diff = nn.Sequential(
+            nn.Linear(self.d_model, self.d_model),
+            nn.Sigmoid(),                             # 引入非线性
+            nn.Linear(self.d_model, 1)
+        )
+        self.proj_guess = nn.Linear(self.d_model, 1)  # 猜测
+
+        # 初始化参数
+        self.initialize()
+
+    def get_exer_embed_layer(self):
+        """读取题目文本嵌入"""
+        kc_embeds = np.load(self.emb_path)
+        kc_embeds = torch.tensor(kc_embeds)  # (948, 768)
+        return nn.Embedding.from_pretrained(kc_embeds, freeze=True)
+
+    def initialize(self):
+        """参数初始化"""
+        nn.init.xavier_uniform_(self.stu_emb.weight)
+        for module in [self.proj_disc, self.proj_diff, self.proj_guess]:
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+
+    def forward(self, stu_ids, exer_in):
+        """
+        输入：
+            stu_ids: 学生ID张量 [batch_size]
+            exer_in: 题目ID张量 [batch_size]
+        """
+        # 学生嵌入
+        proficiency = self.stu_emb(stu_ids)          # [batch_size, 1]
+        # 题目嵌入
+        exer_emb = self.bert(exer_in)                # [batch_size, 768]
+        # 类IRT预测头
+        a = torch.sigmoid(self.proj_disc(exer_emb))  # [batch_size, 1]
+        b = self.proj_diff(exer_emb)                 # [batch_size, 1]
+        guess = torch.sigmoid(self.proj_guess(exer_emb)) * 0.5
+
+        """三参数IRT预测头"""
+        output = guess + (1 - guess) / (1 + torch.exp(-self.a_range * a * (proficiency - b)))
+        # 2PL
+        # output = 1 / (1 + torch.exp(-1.703 * a * (proficiency - b)))
+
+        return output.squeeze(-1), exer_emb, proficiency, proficiency
+
     @staticmethod
     def get_loss(output, labels):
         """计算总损失"""
