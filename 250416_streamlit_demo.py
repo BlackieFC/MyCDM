@@ -6,41 +6,16 @@ import time
 import json
 
 
-# 处理KC名称信息为id2knowname
-know_map_path = "data/JZX_all_kp_map.csv"
-know_map = pd.read_csv(know_map_path)
-
-id2xueke = {}
-id2version = {}
-id2grade = {}
-id2knowname = {}
-qid2diff = {}
-for index,row in know_map.iterrows():
-    this_id = row["knowledge_id"]
-    qid2diff[this_id] = {}
-    this_grade = row["knowledge_grade"]
-    this_xueke = row["knowledge_subject"]
-    this_version = row["knowledge_version"]
-    id2xueke[this_id] = this_xueke
-    id2version[this_id] = this_version
-    id2grade[this_id] = this_grade
-    id2knowname[this_id] = row["knowledge_name"]
-    if pd.isna(row["knowledge_question_group"]):
-        continue
-    q_group = json.loads(row["knowledge_question_group"])
-    for sub_group in q_group:
-        this_diff = sub_group["difficulty"]
-        this_qs = sub_group["question_group"]
-        for sub_q in this_qs:
-            qid2diff[this_id][sub_q["question_id"]] = this_diff
-
+# 直接读取KC名称信息为id2knowname
+with open(r'data/id2knowname.json', 'r', encoding='utf-8') as file:
+    id2knowname = json.load(file)
 
 # 设置页面标题
 st.title("精准学知识点学习路径可视化demo")
 
 # 设置固定路径
 FIXED_PATH = "data/results"  # 固定的本地路径，根据您的实际路径修改
-n_files = 100
+n_files = 1000
 
 def load_all_csv_files(directory_path, max_files=None):
     """读取目录下符合条件的CSV文件并合并为一个DataFrame
@@ -92,17 +67,23 @@ if df is not None:
     # 计算tal_id的出现次数
     tal_id_counts = df['tal_id'].value_counts()
     # 筛选出现次数在500-1000之间的tal_id
-    filtered_tal_ids = tal_id_counts[(tal_id_counts >= 500) & (tal_id_counts <= 1000)].index.tolist()
+    filtered_tal_ids = tal_id_counts[(tal_id_counts >= 200) & (tal_id_counts <= 500)].index.tolist()
 
     if not filtered_tal_ids:
-        st.warning("没有value_count在500-1000之间的tal_id")
+        st.warning("没有value_count在200-500之间的tal_id")
     else:
         # 从数据中提取knowledge_id列的唯一值
         unique_c_values = df['knowledge_id'].unique()
 
         # 初始化图标状态字典（所有图标初始为未点亮）
         if 'icon_states' not in st.session_state:
-            st.session_state.icon_states = {value: False for value in unique_c_values}
+            st.session_state.icon_states = {value.strip("jzx1.5_zsd_"): False for value in unique_c_values}
+            for _val in unique_c_values:
+                _key = _val.strip("jzx1.5_zsd_")
+                if _key in id2knowname.keys():
+                    st.session_state.icon_states[id2knowname[_key]] = False
+                else:
+                    st.session_state.icon_states[_val] = False
             st.session_state.lit_order = []  # 用于记录点亮顺序
 
         # 创建下拉选择框，让用户从筛选后的A列的唯一值中选择
@@ -153,26 +134,28 @@ if df is not None:
                 count = 0
                 for _, row in sorted_rows.iterrows():
                     c_value = row['knowledge_id']
-                    c_value = int(c_value.strip("jzx1.5_zsd_"))
+                    c_value = c_value.strip("jzx1.5_zsd_")
                     if count < 10:
                         # 如果能查到精准学KC名称 & 图标未点亮，则点亮它
-                        if c_value in id2knowname.keys() and not st.session_state.icon_states[c_value]:
+                        if c_value in id2knowname.keys():
                             c_value = id2knowname[c_value]
-                            count += 1
 
-                            # 检查是否需要等待
-                            current_time = time.time()
-                            if last_lit_time and current_time - last_lit_time < 1.0:
-                                sleep_time = 1.0 - (current_time - last_lit_time)
-                                st.write(f"等待 {sleep_time:.2f} 秒...")
-                                time.sleep(sleep_time)
+                            if not st.session_state.icon_states[c_value]:
+                                count += 1
 
-                            # 点亮图标
-                            st.session_state.icon_states[c_value] = True
-                            st.session_state.lit_order.append(c_value)  # 添加到点亮顺序列表
-                            newly_lit.append(c_value)
-                            st.write(f"点亮图标: {c_value}")
-                            last_lit_time = time.time()
+                                # 检查是否需要等待
+                                current_time = time.time()
+                                if last_lit_time and current_time - last_lit_time < 1.0:
+                                    sleep_time = 1.0 - (current_time - last_lit_time)
+                                    # st.write(f"等待 {sleep_time:.2f} 秒...")
+                                    time.sleep(sleep_time)
+
+                                # 点亮图标
+                                st.session_state.icon_states[c_value] = True
+                                st.session_state.lit_order.append(c_value)  # 添加到点亮顺序列表
+                                newly_lit.append(c_value)
+                                st.write(f"点亮图标: {c_value}")
+                                last_lit_time = time.time()
                     else:
                         break
 
