@@ -25,7 +25,9 @@ def parse_args():
     # 实验配置
     parser.add_argument('--proj_name', type=str, default='test_250319_00', help='项目名称，用于保存检查点')
     parser.add_argument('--data', type=str, default='NIPS34', choices=['NIPS34'], help='使用的数据集名称')
-    parser.add_argument('--scenario', type=str, default='all', choices=['all', 'Algebra', 'Algebra_cold', 'GeometryandMeasure', 'Number', 'student_all', 'student_cut'], help='情景')
+    parser.add_argument('--scenario', type=str, default='all', 
+                        choices=['all', 'Algebra', 'Algebra_cold', 'GeometryandMeasure', 'Number', 'student_all', 'student_cut', 'student_all_f1', 'student_all_f2', 'student_all_f3', 'student_all_f4', 'student_all_f5'],
+                        help='情景')
 
     # 训练超参数
     parser.add_argument('--epoch', type=int, default=100, help='最大训练轮数')
@@ -117,11 +119,11 @@ def main_parallel(args):
     #                      ).to(device)
     # 使用全量微调基础模型嵌入头 + 三参数IRT预报头
     model = Baseline_IRT_FFT(num_students=student_n,
-                                bert_model_name=args.bert_path,
-                                # tau=args.tau,
-                                # lambda_reg=args.lambda_reg,
-                                # lambda_cl=args.lambda_cl,
-                                ).to(device)
+                             bert_model_name=args.bert_path,
+                             # tau=args.tau,
+                             # lambda_reg=args.lambda_reg,
+                             # lambda_cl=args.lambda_cl,
+                             ).to(device)
 
     # 数据加载器
     train_loader = MyDataloader(
@@ -156,9 +158,7 @@ def main_parallel(args):
             {"params": other_params, "lr": 1e-3}    # 其他部分使用较大学习率
         ]
     )
-
-    # optimizer = torch.optim.Adam(params=model.parameters(), lr=0.0001)
-
+    # optimizer = torch.optim.Adam(params=model.parameters(), lr=0.0001)  # 使用统一学习率
     # # 使用AdamW优化器
     # optimizer = torch.optim.AdamW(
     #     [
@@ -189,8 +189,8 @@ def main_parallel(args):
                 early_stop_counter = extra_info['early_stop_counter']
                 # 尝试加载best_val_loss (如果存在)
                 best_val_loss = float('inf')
-                if 'best_val_loss' in extra_info:
-                    best_val_loss = extra_info['best_val_loss']
+                if 'best_val_rmse' in extra_info:
+                    best_val_loss = extra_info['best_val_rmse']
                 # 尝试加载best_val_acc (如果存在)
                 best_val_acc = 0
                 if 'best_val_acc' in extra_info:
@@ -255,23 +255,23 @@ def main_parallel(args):
         # 验证步骤 & 打印验证集性能
         val_pred_loss, val_acc, val_auc, _, _ = val_or_test_parallel(accelerator, model, val_loader)
         if accelerator.is_main_process:
-            print(f"  Val Pred Loss: {val_pred_loss:.4f} Acc: {val_acc:.4f} AUC: {val_auc:.4f}")
+            print(f"  Val Pred RMSE: {val_pred_loss:.4f} Acc: {val_acc:.4f} AUC: {val_auc:.4f}")
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"{now}, testing epoch {epoch + 1}")
         
         # 测试步骤 & 打印测试集性能
         test_pred_loss, test_acc, test_auc, _, _ = val_or_test_parallel(accelerator, model, test_loader)
         if accelerator.is_main_process:
-            print(f"  Test Pred Loss: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
+            print(f"  Test RMSE: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
 
         # 记录日志（主进程）
         if accelerator.is_main_process:
             wandb.log({
                 "train/pred_loss": train_total_loss,
-                "val/pred_loss": val_pred_loss,
+                "val/rmse": val_pred_loss,
                 "val/acc": val_acc,
                 "val/auc": val_auc,
-                "test/pred_loss": test_pred_loss,  # 250319新增：记录每轮的测试集性能
+                "test/rmse": test_pred_loss,  # 250319新增：记录每轮的测试集性能；250416:订正为rmse
                 "test/acc": test_acc,
                 "test/auc": test_auc,
                 "epoch": epoch + 1,
@@ -287,10 +287,10 @@ def main_parallel(args):
                 'epoch': epoch,
                 'current_val_auc': val_auc,
                 'current_val_acc': val_acc,
-                'current_val_loss': val_pred_loss,
+                'current_val_rmse': val_pred_loss,
                 'best_val_auc': best_val_auc,
                 'best_val_acc': best_val_acc,
-                'best_val_loss': best_val_loss,
+                'best_val_rmse': best_val_loss,
                 'early_stop_counter': early_stop_counter,
                 'wandb_run_id': wandb_run_id if 'wandb_run_id' in locals() else None
             }, os.path.join(last_checkpoint_path, "checkpoint_info.pt"))  # 注意保存至last_checkpoint_path
@@ -308,10 +308,10 @@ def main_parallel(args):
                     'epoch': epoch,
                     'current_val_auc': val_auc,
                     'current_val_acc': val_acc,
-                    'current_val_loss': val_pred_loss,
+                    'current_val_rmse': val_pred_loss,
                     'best_val_auc': best_val_auc,
                     'best_val_acc': best_val_acc,
-                    'best_val_loss': best_val_loss,
+                    'best_val_rmse': best_val_loss,
                     'early_stop_counter': early_stop_counter,
                     'wandb_run_id': wandb_run_id if 'wandb_run_id' in locals() else None
                 }, os.path.join(best_model_path, "checkpoint_info.pt"))  # 注意保存至best_model_path
@@ -334,12 +334,12 @@ def main_parallel(args):
             print("\n加载最佳模型进行测试...")
             print('========================================================================')
             print(f"\nFinal Test Results:")
-            print(f"  Test Pred Loss: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
+            print(f"  Test RMSE: {test_pred_loss:.4f} Acc: {test_acc:.4f} AUC: {test_auc:.4f}")
             print('========================================================================')
         # 记录最终测试集性能（主进程）
         if accelerator.is_main_process:
             wandb.log({
-                "final/test_loss": test_pred_loss,  # 250319修改：记录最终测试集性能
+                "final/test_rmse": test_pred_loss,  # 250319修改：记录最终测试集性能；250416:订正为rmse
                 "final/test_acc": test_acc,
                 "final/test_auc": test_auc
             })
@@ -347,7 +347,7 @@ def main_parallel(args):
 
     # 返回最佳验证集性能（不重要）
     return {
-        'val_loss': best_val_loss,
+        'val_rmse': best_val_loss,
         'val_acc': best_val_acc,
         'val_auc': best_val_auc
     }
@@ -438,7 +438,7 @@ def val_or_test_parallel(_accelerator, _model, _data_loader):
 
 if __name__ == '__main__':
     """
-    accelerate launch --num_processes=4 --num_machines=1 --mixed_precision fp16 train_parallel.py --proj_name test_250319_00 --bs 256 --epoch 100 --scenario student_all
+    CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch --num_processes=4 --num_machines=1 --mixed_precision fp16 train_parallel.py --proj_name 250416_bert_base_fft_stu_all_f1 --bs 256 --epoch 100 --scenario student_all_f1
     """
     args_in = parse_args()
     main_parallel(args_in)

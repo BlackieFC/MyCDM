@@ -8,3 +8,6 @@ my_qplus.py
 my_qplus_backup.py
 roberta/
 deepseek_local.py
+README.md
+process_csv.ipynb
+processed_data.json
